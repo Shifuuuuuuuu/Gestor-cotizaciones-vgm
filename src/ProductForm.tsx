@@ -1,4 +1,6 @@
+import { usePermissions } from "./usePermissions";
 import { useState, useRef } from "react";
+import { beginFeedback } from "./feedback";
 import { Check, Plus, Package, Wrench } from "lucide-react";
 import { Modal, Spinner } from "./ui";
 import { ImageDropzone } from "./ProductImage";
@@ -21,6 +23,8 @@ export function ProductForm({
   onSaved: (p: Product, keepOpen: boolean) => void;
   quick?: boolean;
 }) {
+  const { has } = usePermissions();
+  const allowed = has("products", product ? "edit" : "create");
   const [data, setData] = useState<ProductInput>(
       product ?? initial ?? blankProduct(),
     ),
@@ -30,6 +34,11 @@ export function ProductForm({
     [error, setError] = useState("");
   const again = useRef(false);
   async function submit() {
+    if (!allowed) return;
+    const operation = beginFeedback(
+      product ? "Editando producto" : "Creando producto",
+      "Guardando producto en el servidor",
+    );
     setBusy(true);
     setError("");
     try {
@@ -39,13 +48,20 @@ export function ProductForm({
         version: product?.version,
         reason,
       });
+      operation.step("Actualizando catálogo");
       onSaved(p, again.current);
       if (again.current) {
         setData(blankProduct());
         setReason("");
       } else onClose();
+      operation.success(
+        product ? "Producto editado" : "Producto creado",
+        p.code + " · Información guardada correctamente.",
+        product ? "edit" : "success",
+      );
     } catch (e) {
       setError((e as Error).message);
+      operation.error(e);
     } finally {
       setBusy(false);
     }
@@ -221,13 +237,17 @@ export function ProductForm({
           )}
         </div>
         <div className="modal-actions editor-footer">
-          <button type="button" disabled={busy || uploading} onClick={onClose}>
+          <button
+            type="button"
+            disabled={busy || uploading || !allowed}
+            onClick={onClose}
+          >
             Cancelar
           </button>
           {!product && (
             <button
               type="submit"
-              disabled={busy || uploading}
+              disabled={busy || uploading || !allowed}
               onClick={() => {
                 again.current = true;
               }}
@@ -239,7 +259,7 @@ export function ProductForm({
           <button
             type="submit"
             className="primary"
-            disabled={busy || uploading}
+            disabled={busy || uploading || !allowed}
             onClick={() => {
               again.current = false;
             }}

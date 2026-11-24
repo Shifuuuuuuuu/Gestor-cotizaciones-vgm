@@ -11,6 +11,11 @@ import {
   type StockMovement,
 } from "../shared/inventory";
 import { jsonFile } from "./jsonFile";
+import {
+  blankBusiness,
+  assertBusinessConsistency,
+  type BusinessState,
+} from "../shared/business";
 export const cloud = process.env.STORAGE_MODE === "firebase";
 if (cloud)
   initializeApp({
@@ -18,7 +23,8 @@ if (cloud)
     projectId: process.env.FIREBASE_PROJECT_ID,
   });
 type Receipt = { hash: string; owner: string; doc: Doc };
-type State = {
+export type State = {
+  business: BusinessState;
   receipts?: Record<string, Receipt>;
   documents: Doc[];
   events: Event[];
@@ -29,6 +35,7 @@ type State = {
   importBatches: Record<string, { hash: string; ids: string[] }>;
 };
 const local = jsonFile<State>("store.json", () => ({
+  business: blankBusiness(),
   documents: [],
   events: [],
   counters: { quote: 0, invoice: 0 },
@@ -37,6 +44,7 @@ const local = jsonFile<State>("store.json", () => ({
   importBatches: {},
 }));
 function normalize(s: State) {
+  s.business ??= blankBusiness();
   s.products ??= [];
   s.stockMovements ??= [];
   s.importBatches ??= {};
@@ -51,7 +59,7 @@ const maximum = (docs: Doc[], kind: Doc["kind"]) =>
     );
 export async function list() {
   if (!cloud) {
-    const { receipts, ...state } = normalize(await local.read());
+    const { receipts, business, ...state } = normalize(await local.read());
     return state;
   }
   const db = getFirestore();
@@ -67,19 +75,28 @@ export async function list() {
     stockMovements: m.docs.map((x) => x.data() as StockMovement),
   };
 }
-async function transact<R>(
+export async function transact<R>(
   fn: (s: State) => R,
   options: { eventId?: string; importId?: string; requestId?: string } = {},
 ): Promise<R> {
-  if (!cloud) return local.update((s) => fn(normalize(s)));
+  if (!cloud)
+    return local.update((s) => {
+      const state = normalize(s);
+      const result = fn(state);
+      assertBusinessConsistency(state.business, state.documents);
+      return result;
+    });
   const db = getFirestore();
   return db.runTransaction(async (t) => {
     const lock = db.doc("metadata/commerce-lock");
     const generation = await t.get(lock);
-    const [docs, products] = await Promise.all([
-      t.get(db.collection("documents")),
-      t.get(db.collection("products")),
-    ]);
+    const [docs, products, businessRecords, businessCounters] =
+      await Promise.all([
+        t.get(db.collection("documents")),
+        t.get(db.collection("products")),
+        t.get(db.collection("businessRecords")),
+        t.get(db.doc("metadata/business-counters")),
+      ]);
     const event = options.eventId
       ? await t.get(db.doc("events/" + options.eventId))
       : null;
@@ -90,6 +107,13 @@ async function transact<R>(
       ? await t.get(db.doc("commandReceipts/" + options.requestId))
       : null;
     const state: State = {
+      business: {
+        records: businessRecords.docs.map(
+          (d) => d.data() as BusinessState["records"][number],
+        ),
+        events: [],
+        counters: businessCounters.data()?.values ?? {},
+      },
       receipts: receipt?.exists
         ? { [options.requestId!]: receipt.data() as Receipt }
         : {},
@@ -113,7 +137,19 @@ async function transact<R>(
         state.products.map((p) => [p.id, JSON.stringify(p)]),
       ),
       oldEvents = state.events.length;
+    const originalBusiness = new Map(
+      state.business.records.map((r) => [r.id, JSON.stringify(r)]),
+    );
     const result = fn(state);
+    assertBusinessConsistency(state.business, state.documents);
+    for (const record of state.business.records)
+      if (originalBusiness.get(record.id) !== JSON.stringify(record))
+        t.set(db.doc("businessRecords/" + record.id), record);
+    for (const event of state.business.events)
+      t.create(db.doc("businessEvents/" + event.id), event);
+    t.set(db.doc("metadata/business-counters"), {
+      values: state.business.counters,
+    });
     for (const d of state.documents)
       if (originalDocs.get(d.id) !== JSON.stringify(d))
         t.set(db.doc("documents/" + d.id), d);
@@ -148,6 +184,26 @@ async function transact<R>(
     t.set(lock, { version: (generation.data()?.version ?? 0) + 1 });
     return result;
   });
+}
+export async function businessSnapshot(): Promise<BusinessState> {
+  if (!cloud) return normalize(await local.read()).business;
+  const db = getFirestore();
+  const [records, events, counters] = await Promise.all([
+    db.collection("businessRecords").get(),
+    db.collection("businessEvents").get(),
+    db.doc("metadata/business-counters").get(),
+  ]);
+  return {
+    records: records.docs.map(
+      (d) => d.data() as BusinessState["records"][number],
+    ),
+    events: events.docs.map((d) => d.data() as BusinessState["events"][number]),
+    counters: counters.data()?.values ?? {},
+  };
+}
+export async function completeLocalSnapshot() {
+  const {receipts,...state}=normalize(await local.read());
+  return state;
 }
 export async function mutate(cmd: Command, actor: string, owner = actor) {
   const hash = createHash("sha256").update(JSON.stringify(cmd)).digest("hex");

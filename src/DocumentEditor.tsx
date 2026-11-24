@@ -1,3 +1,4 @@
+import { usePermissions } from "./usePermissions";
 import { RutLookup } from "./RutLookup";
 import { QuoteProducts } from "./QuoteProducts";
 import type { Product } from "../shared/inventory";
@@ -28,6 +29,11 @@ export function DocumentEditor({
   onClose: () => void;
   onSave: (data: Input) => void;
 }) {
+  const { has } = usePermissions();
+  const allowed = has(
+    initial.kind === "quote" ? "quotes" : "invoices",
+    old ? "edit" : "create",
+  );
   const [data, setData] = useState(initial),
     [field, setField] = useState<"client" | "rut" | null>(null),
     [matched, setMatched] = useState("");
@@ -75,7 +81,7 @@ export function DocumentEditor({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onSave(data);
+          if (allowed) onSave(data);
         }}
       >
         <div className="modal-body">
@@ -286,7 +292,7 @@ export function DocumentEditor({
           <button type="button" onClick={onClose}>
             Cancelar
           </button>
-          <button className="primary" disabled={busy}>
+          <button className="primary" hidden={!allowed} disabled={busy}>
             {busy ? (
               <>
                 <Spinner />

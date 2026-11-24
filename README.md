@@ -44,12 +44,13 @@ Sin verificación por correo. Las contraseñas se guardan con scrypt, las sesion
 
 Modo local:
 
-- `data/store.json`: documentos, versiones, eventos, secuencias, catálogo, movimientos de stock y control de lotes importados.
+- `data/store.json`: documentos, versiones, eventos, secuencias, catálogo, movimientos de stock, control de lotes importados y operaciones comerciales (`business`).
+- `data/attachments/`: archivos comerciales originales, conservados por identificador.
 - `data/images/`: imágenes de productos (archivos JSON con contenido comprimido).
 - `data/customers.json`: directorio y estado de clientes. Se genera desde documentos existentes si aún no existe.
 - `data/users.json`: perfiles y hashes de contraseña.
 
-No eliminar esos archivos para actualizar el código. Para respaldo local integral, detener la API y copiar `data` a un lugar privado. Configuración permite descargar JSON de documentos, historial, clientes, catálogo y movimientos; no incluye imágenes, cuentas ni hashes. Para restaurarlo manualmente, detener la API, respaldar los archivos actuales, guardar `{documents,events,counters,products,stockMovements,importBatches}` en `store.json` y conservar la carpeta `images` del mismo respaldo y el arreglo `customers` en `customers.json`. Los respaldos antiguos con `counter` también se leen y sus secuencias se derivan de los documentos. No hay importador visual.
+No eliminar esos archivos para actualizar el código. Para respaldo local integral, detener la API y copiar `data` a un lugar privado. Configuración permite descargar JSON de documentos, historial, clientes, catálogo y movimientos; no incluye imágenes, cuentas, hashes ni los adjuntos comerciales. Para restaurarlo manualmente, detener la API y respaldar los archivos actuales; actualizar los campos `{documents,events,counters,products,stockMovements,importBatches}` de `store.json` preservando `business` y la carpeta `attachments` del mismo respaldo integral. Conservar también la carpeta `images` y guardar el arreglo `customers` en `customers.json`. Para operaciones y binarios comerciales, usar el ZIP descrito al final de este documento. Los respaldos antiguos con `counter` también se leen y sus secuencias se derivan de los documentos. No hay importador visual.
 
 Los documentos conservan una copia de los datos del cliente; editar o eliminar el cliente no modifica documentos anteriores. Se rechazan ediciones basadas en versiones antiguas para evitar pérdida de cambios.
 
@@ -79,7 +80,7 @@ npm start
 
 ## Alcance
 
-Una empresa y equipo autorizado. Los documentos se cargan en memoria; para grandes volúmenes añadir paginación. Facturas internas: no incluye SII/DTE, folios tributarios, firma electrónica, pagos parciales ni notas de crédito. No incluye contabilidad, migración SQL de Dolibarr, adjuntos, correo automático ni consulta de empresas por RUT a un proveedor externo. Las fuentes estándar del PDF cubren Latin; otros alfabetos requieren una fuente Unicode.
+Una empresa y equipo autorizado, con portal limitado por cliente. Los documentos se cargan en memoria; para grandes volúmenes añadir paginación e índices. La facturación sigue siendo interna: la integración con Defontana queda pendiente; no se emiten SII/DTE, folios tributarios, notas de crédito o débito. Incluye pagos parciales, anticipos y adjuntos comerciales. No incluye contabilidad general, migración SQL de Dolibarr ni envío automático de correo. Las fuentes estándar del PDF cubren Latin; otros alfabetos requieren una fuente Unicode.
 
 ## Estructura
 
@@ -150,3 +151,54 @@ Papelera separa Cotizaciones, Facturas, Productos, Clientes y Usuarios, con bús
 La sesión local usa cookie HttpOnly de 30 días y tokens aleatorios; el servidor guarda solamente el hash del token en data/sessions.json para mantener el acceso tras reinicios. Firebase utiliza persistencia local. Salir revoca la sesión local, cierra Firebase y elimina el perfil activo de la caché; los borradores pendientes permanecen separados por cuenta. Si sales sin conexión, la revocación del servidor queda pendiente y se intenta antes de la siguiente petición autenticada.
 
 Recordar credenciales conserva correo y preferencia. La contraseña se ofrece al gestor de contraseñas del navegador mediante Credential Management cuando está disponible, además de los campos estándar de autocompletado. No se guarda la contraseña en localStorage/IndexedDB. El navegador decide si muestra el aviso y autocompleta; requiere guardar/autorizar allí las credenciales. Después de Salir no hay ingreso automático: debe pulsarse Ingresar. Desmarcar la opción borra el correo recordado por VGM; las claves ya guardadas se administran en el navegador.
+
+## Órdenes de compra, servicios y cobranza
+
+El menú incluye **Órdenes de compra**, **Servicios**, **Cobranza**, **Agenda** y **Portal de clientes**. Las operaciones nuevas requieren conexión al servidor; el trabajo sin conexión de cotizaciones y facturas en borrador conserva su funcionamiento anterior.
+
+Flujo recomendado:
+
+1. Registrar un cliente activo con RUT. El mismo RUT debe figurar en su cotización y factura para relacionarlas sin mezclar clientes.
+2. Crear/enviar la cotización. Un cliente puede aceptar su versión vigente desde el portal indicando su nombre; la aceptación queda con fecha, responsable y versión en el historial. No se aceptan por portal cotizaciones vencidas.
+3. Registrar la OC o recibirla del cliente mediante su portal. Se guardan número externo, fecha, monto total con IVA, entrega, estado, cotización y archivos. El número de OC es único por cliente, incluida la papelera. La comparación muestra diferencias de total y, al capturar líneas, cantidad, precio neto y descuento; las descripciones repetidas requieren revisión manual. No se extrae automáticamente información de PDFs mediante OCR.
+4. Crear una OT desde la OC o directamente en Servicios. Completar alcance, exclusiones, lugar, responsable, fechas y estado. Incorporar documentos de contrato, informe técnico, horas/materiales, checklist, recepción conforme, estado de pago, garantía, HES y certificados laborales/F30-1. La presencia de una categoría no significa que sea obligatoria para todos los servicios.
+5. Pasar un trabajo terminado a **Por recibir**. El cliente puede registrar recepción conforme con nombre, observaciones, fecha y versión. La OT pasa a Completado. Las actas no se sobrescriben; el historial conserva la evidencia. Modificar el alcance, título, lugar o fechas de un servicio completado lo vuelve a dejar Por recibir. La conformidad registrada no constituye firma electrónica avanzada.
+6. Crear facturas internas desde el flujo existente o desde la OT. En **Cobranza → Asignar a OC / servicio**, indicar cuánto de la factura corresponde a cada operación. Una OC admite varias facturas y una factura puede distribuirse entre varias operaciones. Las asignaciones no pueden exceder la factura ni la OC, incluso con solicitudes concurrentes. Las facturas en borrador consumen disponibilidad asignada; las eliminadas o anuladas no suman al facturado. La OC debe estar aceptada antes de asignar facturas.
+7. Registrar pagos parciales o anticipos. Los anticipos requieren una OC o servicio y pueden asignarse después a una factura del mismo cliente, conservando monto, fecha y comprobante. Las referencias de pago activas no se duplican y el servidor rechaza sobrepagos. Completar el saldo marca la factura Pagada; anular un pago recalcula el saldo y la devuelve a Emitida cuando corresponde. Los pagos anulados se conservan y no se reactivan. Facturas históricas Pagadas sin movimientos de este módulo se consideran saldadas; no se inventan abonos históricos.
+8. Revisar los comprobantes que informen los clientes. Subir un comprobante no confirma dinero ni paga una factura. **Verificar y registrar pago** registra el dinero recibido y marca el comprobante Verificado. Si el pago se anula, su comprobante vuelve a Observado.
+
+Los costos manuales se registran **netos, en CLP**. Los partes de horas y materiales aportan sus costos internos sin duplicarlos como costos manuales. El margen estimado distribuye el neto de las facturas asignadas y descuenta esos costos directos; no es utilidad contable ni incluye gastos generales o impuestos. Registrar materiales en un parte no vuelve a descontar inventario: el stock sigue controlado por las cotizaciones y facturas vinculadas a productos.
+
+La Agenda reúne vencimientos de cotizaciones y cobros, entregas de OC, servicios pendientes, próximas mantenciones, garantías y documentos con vigencia. **Programar siguiente mantención** prepara una OT nueva y evita crear dos sucesoras del mismo servicio. Las recurrencias se programan desde ese botón; no hay un planificador externo que cree trabajos o envíe correos automáticamente.
+
+Cotizaciones y facturas muestran vínculos a su OC/OT y sus respaldos. Los documentos comerciales cuentan con PDF interno, historial de versiones y papelera; los abonos se anulan mediante un movimiento auditado.
+
+## Portal y archivos comerciales
+
+Solo Admin genera enlaces privados con vigencia de 1 a 30 días. Se muestra el enlace completo al generarlo; el servidor guarda su hash, no el token original. Puede revocarse y un enlace revocado no se reactiva. El bloqueo/eliminación del cliente también impide acceder al portal. La URL debe corresponder a un servidor accesible para el cliente: `localhost` solo funciona en el equipo donde se ejecuta VGM.
+
+El portal muestra únicamente cotizaciones enviadas, facturas y operaciones de ese cliente. Permite aceptar cotizaciones, subir OC, informar comprobantes y recibir servicios. Los costos, enlaces de otros clientes y documentos internos quedan excluidos. Para compartir un documento de servicio hay que activar **Compartir este documento con el cliente**; sus archivos también deben marcarse para portal. Se comprueba la pertenencia en cada descarga, incluidas las imágenes utilizadas al generar PDF. Los enlaces son accesos por posesión del enlace, no cuentas de cliente con contraseña.
+
+Adjuntos: PDF, JPG, PNG, WebP, XLSX o DOCX de hasta 5 MB. Se valida extensión y cabecera, y se registra SHA-256 para comprobar integridad al descargar. No hay OCR, edición de archivos ni análisis antivirus integrado. Quitar un archivo conserva su contenido; puede recuperarse con **Ver archivos retirados**. Las confirmaciones de eliminación y las alertas usan los mismos modales animados, temas y progreso del resto del sistema.
+
+En local, los registros, versiones y eventos viven en `data/store.json`, dentro de `business`; los archivos binarios en `data/attachments/<id>`. No borrar esos directorios al actualizar. En Firebase, se usan `businessRecords`, `businessEvents`, `businessBlobs/<id>/chunks` y `metadata/business-counters`, compartiendo el bloqueo transaccional `metadata/commerce-lock` con la facturación e inventario. Las nuevas colecciones continúan sin acceso directo del navegador; todas las acciones pasan por la API. La operación Firebase real requiere credenciales y comprobación en tu proyecto.
+
+**Configuración → Descargar operaciones y adjuntos (ZIP)**, solo Admin, descarga `records.json`, `manifest.json` y los archivos comerciales, incluidos los retirados. Incluye documentos, eventos, catálogo y clientes; excluye cuentas, sesiones e imágenes del catálogo. El respaldo JSON anterior mantiene su alcance de documentos/clientes/catálogo y no incluye estos binarios. Para un respaldo integral local, detener la API y copiar toda la carpeta `data` a una ubicación privada.
+
+El ZIP es un respaldo exportable, sin importador visual. Para restaurar localmente, detener la API y respaldar antes `data`; tomar los campos de `records.json` excepto `customers` para `store.json`, guardar `customers` como arreglo en `customers.json`, y copiar cada archivo `attachments/<id>/<nombre>` del ZIP a `data/attachments/<id>`. Conservar las cuentas, sesiones e imágenes del catálogo del respaldo integral correspondiente. No importar directamente estos JSON en Firestore.
+
+Pruebas nuevas: límites de OC y pagos bajo concurrencia, idempotencia, saldos/anulación, verificación de comprobantes, aislamiento y revocación del portal, imágenes y adjuntos autorizados, costos netos, recurrencias y ZIP con CRC. Se ejecutan con datos temporales y no alteran `data` real.
+
+## Roles y permisos de usuarios
+
+En **Administración → Roles y permisos** puedes crear, duplicar y editar roles, escoger las vistas que pueden consultar y habilitar sus acciones: crear/adjuntar, editar, eliminar/recuperar, confirmar/cambiar estado, exportar/descargar y compartir. Primero se activa **Ver**; al desactivarlo también se quitan las acciones de esa vista. **Mi perfil** siempre está disponible para una cuenta activa.
+
+Asigna el rol en **Administración → Usuarios**, tanto al crear una cuenta como desde el selector de cada usuario. Los cambios de un rol afectan a todas sus cuentas. **Admin** conserva acceso completo y no puede modificarse ni eliminarse; solo Admin administra usuarios, roles, enlaces privados y respaldos completos. El rol inicial **Usuario** mantiene los permisos anteriores para las cuentas existentes; se puede ajustar su matriz, pero no eliminarlo.
+
+Para eliminar un rol personalizado primero hay que reasignar todos sus usuarios, incluidos los desactivados y enviados a papelera. Los roles eliminados se pueden recuperar desde **Ver roles eliminados**. Los cambios conservan versiones e historial, y una edición desactualizada solicita recargar para evitar sobrescribir cambios ajenos. Se mantienen las protecciones del acceso propio y del último administrador activo.
+
+El menú y los controles se adaptan a los permisos. El servidor consulta el rol vigente en cada petición, comprueba las acciones y filtra documentos, clientes, productos, operaciones, adjuntos e historiales. Dashboard, Resumen y Agenda muestran información de los módulos permitidos; no conceden acceso adicional. Para elegir clientes o vincular cotizaciones, OC, OT o facturas, concede también **Ver** en esas secciones. Confirmar pagos requiere permisos de Cobranza; una recepción conforme requiere confirmar en Servicios. El portal privado de clientes mantiene sus propias comprobaciones de pertenencia y vigencia.
+
+Con la aplicación abierta y conectada, los menús se actualizan al volver a la pestaña, ante una denegación o en un máximo de aproximadamente 20 segundos. La autorización del servidor cambia desde la siguiente petición. Sin conexión se usan los últimos permisos conocidos y se filtra la caché con ellos; cualquier guardado pendiente se vuelve a autorizar al sincronizar. Una revocación nueva necesita conexión para conocerse.
+
+En modo local los roles y su historial se guardan en `data/roles.json`; consérvalo junto con `users.json` en el respaldo integral de `data`. Los ZIP comerciales no incluyen cuentas, sesiones ni roles. En Firebase se usan `roles`, `accessEvents` y `metadata/access-lock`; las asignaciones y eliminaciones se coordinan transaccionalmente. El navegador no accede directamente a estas colecciones. Las pruebas automatizadas de permisos se ejecutan en modo local; la conexión Firebase real necesita validarse con las credenciales del proyecto.

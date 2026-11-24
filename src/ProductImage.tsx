@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Package, UploadCloud, X } from "lucide-react";
 import { auth } from "./api";
+import { beginFeedback } from "./feedback";
 import { Spinner } from "./ui";
 export function ProductImage({
   src,
@@ -89,12 +90,14 @@ export function ImageDropzone({
     [error, setError] = useState("");
   async function upload(file?: File) {
     if (!file || busy) return;
+    const operation = beginFeedback("Preparando imagen", "Comprimiendo imagen");
     setBusy(true);
     onBusy(true);
     setError("");
     try {
       const blob = await prepareImage(file),
         token = await auth?.currentUser?.getIdToken();
+      operation.step("Guardando imagen en el servidor");
       const res = await fetch("/api/images", {
         method: "POST",
         credentials: "same-origin",
@@ -107,8 +110,13 @@ export function ImageDropzone({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudo subir la imagen.");
       onChange(data.url);
+      operation.success(
+        "Imagen guardada",
+        "La imagen está lista para usar en el producto.",
+      );
     } catch (e) {
       setError((e as Error).message);
+      operation.error(e);
     } finally {
       setBusy(false);
       onBusy(false);

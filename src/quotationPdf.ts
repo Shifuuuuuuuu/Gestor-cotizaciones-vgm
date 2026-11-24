@@ -332,16 +332,21 @@ export function createQuotationPdf(d: Doc, assets: PdfAssets = {}) {
   }
   return pdf;
 }
-export async function loadPdfAssets(d: Doc): Promise<PdfAssets> {
+export async function loadPdfAssets(
+  d: Doc,
+  resolveImage?: (url: string) => string,
+): Promise<PdfAssets> {
   if (typeof window === "undefined") return {};
   const { auth } = await import("./api");
-  const token = await auth?.currentUser?.getIdToken();
+  const token = resolveImage
+    ? undefined
+    : await auth?.currentUser?.getIdToken();
   const headers: Record<string, string> = token
     ? { Authorization: "Bearer " + token }
     : {};
   async function fetchBytes(url: string, protectedImage = false) {
     const res = await fetch(url, {
-      credentials: "same-origin",
+      credentials: resolveImage && protectedImage ? "omit" : "same-origin",
       headers: protectedImage ? headers : {},
       signal: AbortSignal.timeout(15000),
     });
@@ -367,7 +372,10 @@ export async function loadPdfAssets(d: Doc): Promise<PdfAssets> {
         try {
           if (!/^\/api\/images\/[0-9a-f-]{36}$/.test(url))
             throw new Error("Imagen no válida");
-          assets.images![url] = await fetchBytes(url, true);
+          assets.images![url] = await fetchBytes(
+            resolveImage ? resolveImage(url) : url,
+            true,
+          );
         } catch {
           assets.missingImages!++;
         }

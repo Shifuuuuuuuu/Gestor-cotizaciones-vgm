@@ -1,10 +1,22 @@
+import { can, pageModules, type AccessRole } from "../shared/access";
+import { RolesPanel } from "./RolesPanel";
 import { rememberCredentials } from "./rememberCredentials";
+import {
+  beginFeedback,
+  beginForegroundSave,
+  type FeedbackOperation,
+} from "./feedback";
+import { useDialog } from "./useDialog";
 import { TrashPanel } from "./TrashPanel";
 import { SidebarAppearance, useSidebarColor } from "./SidebarAppearance";
+import {
+  NavigationAppearance,
+  useNavigationLayout,
+} from "./NavigationAppearance";
 import { OfflineNotice } from "./OfflineNotice";
 import { useConnection } from "./useConnection";
-import { Administration } from "./Administration";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Administration, type AdminModule } from "./Administration";
+import { lazy, Suspense, useEffect, useState, useRef } from "react";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import {
   Package,
@@ -25,7 +37,13 @@ import {
   Sun,
   Moon,
   Monitor,
-  ChevronRight,
+  ClipboardList,
+  Wrench,
+  Wallet,
+  CalendarDays,
+  Globe,
+  Menu,
+  X,
 } from "lucide-react";
 import { api, auth, login, logout } from "./api";
 import {
@@ -46,6 +64,8 @@ import { DocumentEditor } from "./DocumentEditor";
 import { DocumentDetail, actionLabels } from "./DocumentDetail";
 import { HistoryPanel } from "./HistoryPanel";
 import { ProductsPanel } from "./ProductsPanel";
+import { BusinessPanel, type BusinessSection } from "./BusinessPanel";
+import { downloadCommercialBackup } from "./businessClient";
 import type { Product, StockMovement } from "../shared/inventory";
 const Dashboard = lazy(() => import("./Dashboard"));
 type Page =
@@ -55,23 +75,52 @@ type Page =
   | "Facturas"
   | "Productos"
   | "Clientes"
+  | "Órdenes de compra"
+  | "Servicios"
+  | "Cobranza"
+  | "Agenda"
+  | "Portal de clientes"
   | "Historial"
   | "Papelera"
   | "Configuración"
   | "Mi perfil"
   | "Administración";
+const businessSections: Partial<Record<Page, BusinessSection>> = {
+  "Órdenes de compra": "orders",
+  Servicios: "jobs",
+  Cobranza: "payments",
+  Agenda: "agenda",
+  "Portal de clientes": "portal",
+};
 export default function App() {
   const connected = useConnection();
+  const [mobileNavigation, setMobileNavigation] = useState(
+    () => window.matchMedia("(max-width: 720px)").matches,
+  );
+  const [menuOpen, setMenuOpen] = useState(false);
+  const navigationRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 720px)");
+    const change = () => {
+      setMobileNavigation(media.matches);
+      setMenuOpen(false);
+    };
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  }, []);
   const [page, setPage] = useState<Page>("Dashboard"),
     [documents, setDocuments] = useState<Doc[]>([]),
     [events, setEvents] = useState<Event[]>([]),
     [savedCustomers, setSavedCustomers] = useState<Customer[]>([]),
     [users, setUsers] = useState<Profile[]>([]);
+  const [roles, setRoles] = useState<AccessRole[]>([]);
   const [products, setProducts] = useState<Product[]>([]),
     [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const productSaved = (p: Product) => {
     setProducts((old) => [...old.filter((x) => x.id !== p.id), p]);
-    refresh().catch((e) => notify("Actualiza el catálogo", e.message, true));
+    refresh().catch((e) =>
+      notify("Producto guardado; catálogo pendiente", e.message, "warning"),
+    );
   };
   const [mode, setMode] = useState(""),
     [ready, setReady] = useState(false),
@@ -87,6 +136,11 @@ export default function App() {
       () => localStorage.getItem("vgm-theme") ?? "light",
     );
   const [sidebarColor, setSidebarColor] = useSidebarColor();
+  const [navigationLayout, setNavigationLayout] = useNavigationLayout();
+  const [businessFocus, setBusinessFocus] = useState<string | null>(null);
+  const [adminModule, setAdminModule] = useState<AdminModule>("users");
+  const drawerOpen = mobileNavigation && menuOpen && ready && !!user;
+  useDialog(drawerOpen, () => setMenuOpen(false), navigationRef);
   const { notify, Toasts } = useNotices();
   useEffect(() => {
     const listener = (event: StorageEvent) => {
@@ -112,6 +166,63 @@ export default function App() {
     window.addEventListener("vgm-session-expired", handle);
     return () => window.removeEventListener("vgm-session-expired", handle);
   }, [user?.id]);
+  useEffect(() => {
+    if (!user) return;
+    let active = true,
+      pending = false;
+    const update = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const me = await api("me");
+        if (active)
+          setUser((old) =>
+            old &&
+            old.id === me.id &&
+            old.role === me.role &&
+            old.permissionsVersion === me.permissionsVersion
+              ? old
+              : me,
+          );
+      } catch {
+      } finally {
+        pending = false;
+      }
+    };
+    const visible = () => {
+      if (document.visibilityState === "visible") void update();
+    };
+    const timer = setInterval(update, 20000);
+    window.addEventListener("vgm-permissions-changed", update);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      window.removeEventListener("vgm-permissions-changed", update);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [user?.id]);
+  useEffect(() => {
+    if (!user) return;
+    const allowed =
+      page === "Mi perfil" ||
+      (page === "Administración"
+        ? user.role === "admin"
+        : can(user, pageModules[page]));
+    if (!allowed)
+      setPage(
+        (Object.entries(pageModules).find(([, module]) =>
+          can(user, module),
+        )?.[0] ?? "Mi perfil") as Page,
+      );
+    setSelected(null);
+    setEditing(null);
+    setBusinessFocus(null);
+    if (user.role !== "admin") {
+      setUsers([]);
+      setRoles([]);
+    }
+  }, [user?.id, user?.role, user?.permissionsVersion]);
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
@@ -155,7 +266,7 @@ export default function App() {
   async function refresh() {
     const [data, customers] = await Promise.all([
       api("data"),
-      api("customers"),
+      can(user, "customers") ? api("customers") : Promise.resolve([]),
     ]);
     setProducts(data.products ?? []);
     setStockMovements(data.stockMovements ?? []);
@@ -173,45 +284,57 @@ export default function App() {
       refresh().catch((e) =>
         notify("No se pudieron cargar los datos", e.message, true),
       );
-  }, [user?.id]);
+  }, [user?.id, user?.role, user?.permissionsVersion]);
+  async function loadAdministration() {
+    const [team, access] = await Promise.all([api("users"), api("roles")]);
+    setUsers(team);
+    setRoles(access.roles);
+  }
   useEffect(() => {
     if (
       (page === "Administración" || page === "Papelera") &&
       user?.role === "admin"
     )
-      api("users")
-        .then(setUsers)
-        .catch((e) => notify("No se pudo cargar el equipo", e.message, true));
+      loadAdministration().catch((e) =>
+        notify("No se pudo cargar el equipo", e.message, true),
+      );
   }, [page, user?.role]);
-  async function run(work: () => Promise<unknown>, message?: string) {
+  async function run(
+    work: (operation: FeedbackOperation) => Promise<unknown>,
+    message?: string,
+  ) {
     setBusy(true);
+    const operation = beginFeedback();
+    if (message) operation.result(message);
     try {
-      await work();
-      if (message) notify(message);
+      await work(operation);
+      operation.success();
       return true;
     } catch (e) {
-      notify("No se pudo completar la acción", (e as Error).message, true);
+      operation.error(e);
       return false;
     } finally {
       setBusy(false);
     }
   }
   async function signIn(email: string, password: string, remember: boolean) {
-    await run(async () => {
+    await run(async (operation) => {
+      operation.step("Iniciando sesión");
       if (mode === "firebase") await login(email, password);
       else await api("login", { email, password });
       const me = await api("me");
       rememberCredentials(email, password, remember);
       setUser(me);
       setPage("Dashboard");
-      notify(
+      operation.result(
         `¡Bienvenido, ${me.name.split(" ")[0]}!`,
         "Inicio de sesión exitoso. Tu espacio de trabajo está listo.",
       );
     });
   }
   const signOut = () =>
-    run(async () => {
+    run(async (operation) => {
+      operation.step("Cerrando sesión");
       await api("logout", {});
       await logout();
       setUser(null);
@@ -223,24 +346,52 @@ export default function App() {
       setEvents([]);
       setUsers([]);
       setSavedCustomers([]);
-      notify("Sesión cerrada", "Hasta pronto.");
+      operation.result("Sesión cerrada", "Hasta pronto.");
     });
   const switchPage = (next: Page) => {
+    if (
+      next !== "Mi perfil" &&
+      (next === "Administraci\u00f3n"
+        ? user?.role !== "admin"
+        : !can(user, pageModules[next]))
+    )
+      return;
+    setBusinessFocus(null);
+    setMenuOpen(false);
     setPage(next);
     setSearch("");
     setFilter("Todos");
   };
-  async function command(cmd: Command) {
-    const d = await api("commands", cmd);
-    await refresh().catch((e) =>
-      notify(
-        "Documento guardado",
-        "No se pudo actualizar el listado: " + (e as Error).message,
-        true,
-      ),
+  async function command(
+    cmd: Command,
+    operation: FeedbackOperation,
+    open = true,
+  ) {
+    operation.step(
+      cmd.action === "save"
+        ? "Guardando información"
+        : "Enviando cambio al servidor",
     );
-    setSelected(d);
-    notify(
+    let finishSave = () => {};
+    let d: Doc;
+    try {
+      d = await api("commands", cmd, {
+        onQueued: (id) => {
+          finishSave = beginForegroundSave(id);
+        },
+      });
+    } finally {
+      finishSave();
+    }
+    operation.step(
+      d.pending ? "Actualizando copia local" : "Actualizando documentos",
+    );
+    let refreshError = "";
+    await refresh().catch((e) => {
+      refreshError = (e as Error).message;
+    });
+    if (open) setSelected(d);
+    operation.result(
       d.pending
         ? "Borrador guardado en este navegador"
         : cmd.action === "convert"
@@ -251,46 +402,96 @@ export default function App() {
               : d.kind === "invoice"
                 ? "Factura creada"
                 : "Cotización creada"
-            : actionLabels[cmd.action],
+            : cmd.action === "status"
+              ? (d.kind === "quote" ? "Cotización " : "Factura ") +
+                d.status.toLowerCase()
+              : actionLabels[cmd.action],
       d.pending
         ? "Pendiente de sincronización. El PDF final estará disponible al confirmar el servidor."
-        : d.number + " · Versión " + d.version + " guardada en el historial.",
+        : d.number +
+            " · Versión " +
+            d.version +
+            " guardada en el historial." +
+            (refreshError
+              ? " No se pudo actualizar el listado: " + refreshError
+              : ""),
+      d.pending || refreshError
+        ? "warning"
+        : cmd.action === "save" && cmd.id
+          ? "edit"
+          : cmd.action === "status" &&
+              (d.status === "Rechazada" || d.status === "Anulada")
+            ? "error"
+            : cmd.action === "delete"
+              ? "warning"
+              : cmd.action === "version"
+                ? "edit"
+                : "success",
     );
     return d;
   }
   async function saveDocument(data: Input) {
     if (!editing) return;
 
-    await run(async () => {
-      const saved = await command({
-        action: "save",
-        id: editing.old?.id,
-        version: editing.old?.version,
-        data,
-      });
+    await run(async (operation) => {
+      const saved = await command(
+        {
+          action: "save",
+          id: editing.old?.id,
+          version: editing.old?.version,
+          data,
+        },
+        operation,
+      );
       setEditing(null);
       if (saved.pending) return;
       try {
-        await api("customers", {
-          data: {
-            name: data.client,
-            rut: data.rut,
-            email: data.email,
-            address: data.address,
-            phone:
-              customers.find(
-                (c) =>
-                  cleanRut(c.rut) && cleanRut(c.rut) === cleanRut(data.rut),
-              )?.phone ?? "",
-          },
-        });
-        setSavedCustomers(await api("customers"));
+        const existing = customers.find(
+          (c) =>
+            (cleanRut(c.rut) && cleanRut(c.rut) === cleanRut(data.rut)) ||
+            c.name.toLowerCase() === data.client.toLowerCase(),
+        );
+        if (
+          can(user, "customers") &&
+          can(user, "customers", existing ? "edit" : "create")
+        ) {
+          operation.step("Actualizando directorio de clientes");
+          await api("customers", {
+            data: {
+              name: data.client,
+              rut: data.rut,
+              email: data.email,
+              address: data.address,
+              phone:
+                customers.find(
+                  (c) =>
+                    cleanRut(c.rut) && cleanRut(c.rut) === cleanRut(data.rut),
+                )?.phone ?? "",
+            },
+          });
+          setSavedCustomers(await api("customers"));
+        }
       } catch (e) {
-        notify(
+        operation.result(
           "Documento guardado",
           "No se pudo actualizar el directorio: " + (e as Error).message,
-          true,
+          "warning",
         );
+      }
+      if (
+        !editing.old &&
+        saved.kind === "quote" &&
+        can(user, "quotes", "export")
+      ) {
+        try {
+          await exportDoc(saved, "pdf", operation.step);
+        } catch (e) {
+          operation.result(
+            "Cotización guardada; PDF pendiente",
+            (e as Error).message + " Puedes descargarlo desde el detalle.",
+            "warning",
+          );
+        }
       }
     });
   }
@@ -316,6 +517,7 @@ export default function App() {
     )
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const newDoc = (kind: "quote" | "invoice") => {
+    if (!can(user, kind === "quote" ? "quotes" : "invoices", "create")) return;
     setSelected(null);
     setEditing({ old: null, data: { ...blank(), kind } });
   };
@@ -326,10 +528,52 @@ export default function App() {
     ["Facturas", Receipt],
     ["Productos", Package],
     ["Clientes", Users],
+    ["Órdenes de compra", ClipboardList],
+    ["Servicios", Wrench],
+    ["Cobranza", Wallet],
+    ["Agenda", CalendarDays],
+    ["Portal de clientes", Globe],
     ["Historial", History],
     ["Papelera", Trash2],
     ["Configuración", Settings],
   ] as const;
+  const renderBusiness = (section: BusinessSection) =>
+    user ? (
+      <BusinessPanel
+        section={section}
+        focusId={businessFocus}
+        customers={customers}
+        documents={documents}
+        user={user}
+        onRefresh={refresh}
+        onDocument={setSelected}
+        onNewInvoice={(record) => {
+          if (!can(user, "invoices", "create")) return;
+          const customer = customers.find((c) => c.id === record.customerId);
+          const data = record.data as any;
+          setEditing({
+            old: null,
+            data: {
+              ...blank(),
+              kind: "invoice",
+              client: record.customerName,
+              rut: record.customerRut,
+              email: customer?.email ?? "",
+              address: customer?.address ?? "",
+              notes: "Servicio " + record.number + " · " + (data.scope ?? ""),
+              items: [
+                {
+                  description: data.title || "Servicio " + record.number,
+                  quantity: 1,
+                  price: 0,
+                  discount: 0,
+                },
+              ],
+            },
+          });
+        }}
+      />
+    ) : null;
   const descriptions: Record<Page, string> = {
     Dashboard: "Cotizaciones, facturación y actividad comercial en cifras.",
     Resumen: "Una mirada clara a tus cotizaciones, ventas y próximos pasos.",
@@ -338,13 +582,21 @@ export default function App() {
     Facturas: "Organiza tus facturas internas y su estado de pago.",
     Productos: "Productos, servicios y existencias en un solo lugar.",
     Clientes: "Los datos de tus clientes, siempre a mano.",
+    "Órdenes de compra":
+      "Respalda lo aprobado por el cliente y controla su facturación.",
+    Servicios:
+      "Órdenes de trabajo, informes, recepción conforme y rentabilidad.",
+    Cobranza: "Pagos, anticipos, comprobantes y saldos de facturas.",
+    Agenda: "Entregas, mantenciones, garantías y vencimientos.",
+    "Portal de clientes":
+      "Comparte documentos y recibe respaldos de tus clientes.",
     Historial: "Cada cambio, su responsable y una copia para recuperar.",
     Papelera:
       "Cotizaciones, facturas, productos, clientes y usuarios eliminados.",
     Configuración: "Personaliza VGM y administra tus respaldos.",
     "Mi perfil": "Tu información, tal como quieres que la vea tu equipo.",
     Administración:
-      "Gestiona usuarios, cotizaciones, facturas y productos por módulo.",
+      "Gestiona usuarios, permisos y toda la operación comercial desde un solo panel.",
   };
   if (!ready)
     return (
@@ -364,41 +616,119 @@ export default function App() {
     );
   return (
     <MotionConfig reducedMotion="user">
-      <div className="app">
-        <aside>
+      <div className="app" data-navigation={navigationLayout}>
+        <div className="mobile-navigation-bar" inert={drawerOpen}>
           <Brand compact />
+          <button
+            className="icon-button"
+            aria-label="Abrir menú de navegación"
+            aria-controls="vgm-navigation"
+            aria-expanded={drawerOpen}
+            onClick={() => setMenuOpen(true)}
+          >
+            <Menu size={24} />
+          </button>
+        </div>
+        <AnimatePresence>
+          {drawerOpen && (
+            <motion.div
+              className="navigation-backdrop"
+              aria-hidden="true"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => setMenuOpen(false)}
+            />
+          )}
+        </AnimatePresence>
+        <aside
+          id="vgm-navigation"
+          ref={navigationRef}
+          className={drawerOpen ? "mobile-menu-open" : ""}
+          role={drawerOpen ? "dialog" : undefined}
+          aria-modal={drawerOpen ? true : undefined}
+          aria-label="Menú de navegación"
+          aria-hidden={mobileNavigation && !drawerOpen ? true : undefined}
+          inert={mobileNavigation && !drawerOpen}
+        >
+          <Brand compact />
+          <button
+            className="mobile-navigation-close icon-button"
+            aria-label="Cerrar menú"
+            onClick={() => setMenuOpen(false)}
+          >
+            <X size={22} />
+          </button>
           <small className="nav-label">PRINCIPAL</small>
           <nav>
-            {nav.map(([name, Icon]) => (
-              <button
-                aria-current={page === name ? "page" : undefined}
-                className={page === name ? "active" : ""}
-                key={name}
-                onClick={() => switchPage(name)}
-              >
-                <Icon size={18} />
-                {name}
-                {name === "Cotizaciones" && <em>{quotes.length}</em>}
-              </button>
-            ))}
+            {nav
+              .filter(([name]) => can(user, pageModules[name]))
+              .map(([name, Icon]) => (
+                <button
+                  aria-current={page === name ? "page" : undefined}
+                  className={page === name ? "active" : ""}
+                  key={name}
+                  aria-label={name}
+                  title={name}
+                  onClick={() => switchPage(name)}
+                >
+                  <Icon size={18} />
+                  <span className="nav-text">{name}</span>
+                  {name === "Cotizaciones" && <em>{quotes.length}</em>}
+                </button>
+              ))}
             {user.role === "admin" && (
               <button
+                aria-label="Administración"
+                title="Administración"
                 className={page === "Administración" ? "active" : ""}
                 onClick={() => switchPage("Administración")}
               >
                 <ShieldCheck size={18} />
-                Administración
+                <span className="nav-text">Administración</span>
               </button>
             )}
           </nav>
-          <div className="sidebar-bottom">
-            <ShieldCheck size={20} />
-            <strong>Cada cambio tiene historia</strong>
-            <p>Versiones y respaldos para trabajar con tranquilidad.</p>
-          </div>
           <div className="profile">
+            <span
+              className={
+                "connection " +
+                (connected === null
+                  ? "checking"
+                  : connected
+                    ? "connected"
+                    : "disconnected")
+              }
+              role="status"
+              aria-label={
+                connected === null
+                  ? "Comprobando conexión con el servidor VGM"
+                  : connected
+                    ? "Conectado al servidor VGM"
+                    : "Desconectado del servidor VGM"
+              }
+              title={
+                connected === null
+                  ? "Comprobando conexión con el servidor VGM"
+                  : connected
+                    ? "Conectado al servidor VGM"
+                    : "Desconectado del servidor VGM"
+              }
+            >
+              <i aria-hidden="true" />
+              <span className="connection-label">
+                {connected === null
+                  ? "Comprobando…"
+                  : connected
+                    ? "Conectado"
+                    : "Desconectado"}
+              </span>
+            </span>
             <button
               className="profile-link"
+              aria-label="Mi perfil"
+              title="Mi perfil"
               onClick={() => switchPage("Mi perfil")}
             >
               <span className="avatar">
@@ -406,52 +736,25 @@ export default function App() {
               </span>
               <span>
                 {user.name}
-                <small>{user.role === "admin" ? "Admin" : "Usuario"}</small>
+                <small>
+                  {user.roleName ??
+                    (user.role === "admin" ? "Admin" : "Usuario")}
+                </small>
               </span>
             </button>
             <button
               aria-label="Cerrar sesión"
               className="icon-button"
-              onClick={signOut}
+              onClick={() => {
+                setMenuOpen(false);
+                signOut();
+              }}
             >
               <LogOut size={16} />
             </button>
           </div>
         </aside>
-        <main>
-          <header>
-            <span>
-              VGM <ChevronRight size={12} /> <b>{page}</b>
-            </span>
-            <div className="header-right">
-              <span
-                className={
-                  "connection " +
-                  (connected === false
-                    ? "disconnected"
-                    : connected === true
-                      ? "connected"
-                      : "checking")
-                }
-                role="status"
-                title="Conexión con el servidor VGM"
-              >
-                <i />
-                {connected === null
-                  ? "Comprobando…"
-                  : connected
-                    ? "Conectado"
-                    : "Desconectado"}
-              </span>
-              <button
-                className="icon-button mobile-logout"
-                aria-label="Salir de VGM"
-                onClick={signOut}
-              >
-                <LogOut size={17} />
-              </button>
-            </div>
-          </header>
+        <main inert={drawerOpen}>
           <OfflineNotice
             connected={connected}
             user={user}
@@ -475,17 +778,22 @@ export default function App() {
                   </h1>
                   <p>{descriptions[page]}</p>
                 </div>
-                {(page === "Cotizaciones" || page === "Facturas") && (
-                  <button
-                    className="primary"
-                    onClick={() =>
-                      newDoc(page === "Facturas" ? "invoice" : "quote")
-                    }
-                  >
-                    <Plus size={18} />
-                    Nueva {page === "Facturas" ? "factura" : "cotización"}
-                  </button>
-                )}
+                {(page === "Cotizaciones" || page === "Facturas") &&
+                  can(
+                    user,
+                    page === "Facturas" ? "invoices" : "quotes",
+                    "create",
+                  ) && (
+                    <button
+                      className="primary"
+                      onClick={() =>
+                        newDoc(page === "Facturas" ? "invoice" : "quote")
+                      }
+                    >
+                      <Plus size={18} />
+                      Nueva {page === "Facturas" ? "factura" : "cotización"}
+                    </button>
+                  )}
               </div>
               {page === "Dashboard" && (
                 <Suspense
@@ -568,7 +876,10 @@ export default function App() {
                         Tu equipo, tus clientes y cada oportunidad en un mismo
                         lugar.
                       </p>
-                      <button onClick={() => switchPage("Cotizaciones")}>
+                      <button
+                        hidden={!can(user, "quotes")}
+                        onClick={() => switchPage("Cotizaciones")}
+                      >
                         Ver cotizaciones <ArrowUpRight size={17} />
                       </button>
                     </div>
@@ -693,6 +1004,8 @@ export default function App() {
                   )}
                 </section>
               )}
+              {businessSections[page] &&
+                renderBusiness(businessSections[page]!)}
               {page === "Productos" && (
                 <ProductsPanel
                   products={products}
@@ -707,7 +1020,8 @@ export default function App() {
                   busy={busy}
                   onAccess={(customer, active, deleted) =>
                     run(
-                      async () => {
+                      async (operation) => {
+                        operation.step("Guardando estado del cliente");
                         const saved = customer.id.startsWith("derived-")
                           ? await api("customers", { data: customer })
                           : customer;
@@ -716,6 +1030,7 @@ export default function App() {
                           active,
                           deleted,
                         });
+                        operation.step("Actualizando directorio");
                         setSavedCustomers(await api("customers"));
                       },
                       deleted
@@ -728,15 +1043,22 @@ export default function App() {
                     )
                   }
                   onSave={(data) =>
-                    run(async () => {
-                      await api("customers", {
-                        id: data.id.startsWith("derived-")
-                          ? undefined
-                          : data.id || undefined,
-                        data,
-                      });
-                      setSavedCustomers(await api("customers"));
-                    }, "Cliente guardado")
+                    run(
+                      async (operation) => {
+                        operation.step("Guardando cliente");
+                        await api("customers", {
+                          id: data.id.startsWith("derived-")
+                            ? undefined
+                            : data.id || undefined,
+                          data,
+                        });
+                        operation.step("Actualizando directorio");
+                        setSavedCustomers(await api("customers"));
+                      },
+                      data.id && !data.id.startsWith("derived-")
+                        ? "Cliente editado"
+                        : "Cliente creado",
+                    )
                   }
                 />
               )}
@@ -757,7 +1079,8 @@ export default function App() {
                   busy={busy}
                   onOpen={setSelected}
                   onRestore={(kind, id) =>
-                    run(async () => {
+                    run(async (operation) => {
+                      operation.step("Recuperando registro");
                       if (kind === "quote" || kind === "invoice") {
                         const d = documents.find((d) => d.id === id)!;
                         await api("commands", {
@@ -782,6 +1105,7 @@ export default function App() {
                         await api("users/trash", { id, deleted: false });
                         setUsers(await api("users"));
                       }
+                      operation.step("Actualizando información");
                       await refresh();
                     }, "Registro restaurado")
                   }
@@ -826,6 +1150,10 @@ export default function App() {
                     value={sidebarColor}
                     onChange={setSidebarColor}
                   />
+                  <NavigationAppearance
+                    value={navigationLayout}
+                    onChange={setNavigationLayout}
+                  />
                   <section className="panel settings">
                     <h2>Conexión y respaldos</h2>
                     <p>
@@ -838,9 +1166,12 @@ export default function App() {
                     </p>
                     <p>Moneda: CLP · Empresa: VGM</p>
                     <button
+                      hidden={user.role !== "admin"}
                       onClick={() =>
-                        run(async () => {
+                        run(async (operation) => {
+                          operation.step("Cargando información del respaldo");
                           const data = await api("data");
+                          operation.step("Generando respaldo JSON");
                           download(
                             new Blob(
                               [
@@ -866,6 +1197,15 @@ export default function App() {
                       <Download size={17} />
                       Descargar respaldo de documentos, clientes y catálogo
                     </button>
+                    {user.role === "admin" && (
+                      <button
+                        className="spaced"
+                        onClick={downloadCommercialBackup}
+                      >
+                        <Download size={17} />
+                        Descargar operaciones y adjuntos (ZIP)
+                      </button>
+                    )}
                     <p className="hint">
                       Las cuentas de usuario se administran por separado. Los
                       documentos guardan su historial completo.
@@ -894,15 +1234,24 @@ export default function App() {
                   busy={busy}
                   cloud={mode === "firebase"}
                   onSave={(p) =>
-                    run(
-                      async () => setUser(await api("me", p)),
-                      "Perfil actualizado",
-                    )
+                    run(async (operation) => {
+                      operation.step("Guardando perfil");
+                      setUser(await api("me", p));
+                    }, "Perfil actualizado")
                   }
                 />
               )}
               {page === "Administración" && user.role === "admin" && (
                 <Administration
+                  module={adminModule}
+                  onModuleChange={(module) => {
+                    setBusinessFocus(null);
+                    setAdminModule(module);
+                  }}
+                  renderBusiness={renderBusiness}
+                  roles={
+                    <RolesPanel users={users} onChanged={loadAdministration} />
+                  }
                   productCount={products.filter((p) => !p.deleted).length}
                   products={
                     <ProductsPanel
@@ -922,44 +1271,45 @@ export default function App() {
                   onNew={newDoc}
                   onRefresh={() => run(refresh, "Datos actualizados")}
                   onCommand={(cmd) =>
-                    run(async () => {
-                      await api("commands", cmd);
-                      await refresh();
-                    }, actionLabels[cmd.action])
+                    run((operation) => command(cmd, operation, false))
                   }
                   users={
                     <AdminPanel
+                      roles={roles}
                       users={users.filter((u) => !u.deleted)}
                       onDelete={(u) =>
-                        run(async () => {
+                        run(async (operation) => {
+                          operation.step("Enviando usuario a la papelera");
                           await api("users/trash", { id: u.id, deleted: true });
                           setUsers(await api("users"));
                         }, "Usuario enviado a la papelera")
                       }
                       cloud={mode === "firebase"}
                       onEdit={(id, profile) =>
-                        run(async () => {
+                        run(async (operation) => {
+                          operation.step("Guardando cambios del usuario");
                           const updated = await api("users/edit", {
                             id,
                             profile,
                           });
                           setUsers(await api("users"));
                           if (id === user.id) {
-                            setUser(updated);
-                            await api("me");
+                            setUser(await api("me"));
                           }
                         }, "Usuario actualizado")
                       }
                       current={user}
                       busy={busy}
                       onCreate={(data) =>
-                        run(async () => {
+                        run(async (operation) => {
+                          operation.step("Creando cuenta de usuario");
                           await api("users", data);
                           setUsers(await api("users"));
                         }, "Usuario creado")
                       }
                       onAccess={(u, role, active) =>
-                        run(async () => {
+                        run(async (operation) => {
+                          operation.step("Guardando permisos de acceso");
                           await api("users/access", { id: u.id, role, active });
                           setUsers(await api("users"));
                         }, "Acceso actualizado")
@@ -995,6 +1345,28 @@ export default function App() {
               documents={documents}
               onOpen={setSelected}
               events={events}
+              onOpenBusiness={(record) => {
+                setSelected(null);
+                if (page === "Administraci\u00f3n") {
+                  setAdminModule(
+                    record.kind === "order"
+                      ? "orders"
+                      : record.kind === "job" ||
+                          record.kind === "serviceDoc" ||
+                          record.kind === "cost"
+                        ? "jobs"
+                        : "payments",
+                  );
+                } else
+                  switchPage(
+                    record.kind === "order"
+                      ? "Órdenes de compra"
+                      : record.kind === "job"
+                        ? "Servicios"
+                        : "Cobranza",
+                  );
+                setBusinessFocus(record.id);
+              }}
               busy={busy}
               onClose={() => setSelected(null)}
               onEdit={() => setEditing({ data: selected, old: selected })}
@@ -1004,10 +1376,10 @@ export default function App() {
                   old: null,
                 })
               }
-              onCommand={(cmd) => run(() => command(cmd))}
+              onCommand={(cmd) => run((operation) => command(cmd, operation))}
               onExport={(format) =>
                 run(
-                  () => exportDoc(selected, format),
+                  (operation) => exportDoc(selected, format, operation.step),
                   "Archivo " + format.toUpperCase() + " generado",
                 )
               }

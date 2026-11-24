@@ -1,4 +1,6 @@
+import { usePermissions } from "./usePermissions";
 import { useEffect, useState } from "react";
+import { beginFeedback, type FeedbackOperation } from "./feedback";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Plus,
@@ -21,7 +23,7 @@ import {
 } from "../shared/inventory";
 import { money } from "../shared/model";
 import { api } from "./api";
-import { Modal, Spinner } from "./ui";
+import { Modal, Spinner, ConfirmationDialog } from "./ui";
 import { ProductForm } from "./ProductForm";
 import { ProductImage } from "./ProductImage";
 import { ProductImport } from "./ProductImport";
@@ -37,6 +39,7 @@ export function ProductsPanel({
   onRefresh: () => Promise<void>;
   onSaved: (p: Product) => void;
 }) {
+  const { has } = usePermissions();
   const [query, setQuery] = useState(""),
     [filter, setFilter] = useState("active"),
     [form, setForm] = useState<{
@@ -60,13 +63,17 @@ export function ProductsPanel({
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
-  async function run(fn: () => Promise<unknown>) {
+  async function run(fn: (operation: FeedbackOperation) => Promise<unknown>) {
+    const operation = beginFeedback("Procesando catálogo");
+    operation.result("Información actualizada", undefined, "edit");
     setBusy(true);
     setError("");
     try {
-      await fn();
+      await fn(operation);
+      operation.success();
     } catch (e) {
       setError((e as Error).message);
+      operation.error(e);
     } finally {
       setBusy(false);
     }
@@ -108,7 +115,8 @@ export function ProductsPanel({
             </button>
             <button
               onClick={() =>
-                run(async () => {
+                run(async (operation) => {
+                  operation.step("Preparando plantilla Excel");
                   const m = await import("./productExcel");
                   download(
                     new Blob([m.templateBuffer()], {
@@ -116,17 +124,29 @@ export function ProductsPanel({
                     }),
                     "plantilla-productos-vgm.xlsx",
                   );
+                  operation.result(
+                    "Plantilla Excel generada",
+                    "Descarga iniciada.",
+                    "success",
+                  );
                 })
               }
             >
               <Download size={16} />
               Plantilla Excel
             </button>
-            <button onClick={() => setImporting(true)}>
+            <button
+              hidden={!has("products", "create")}
+              onClick={() => setImporting(true)}
+            >
               <Upload size={16} />
               Importar Excel
             </button>
-            <button className="primary" onClick={() => setForm({})}>
+            <button
+              hidden={!has("products", "create")}
+              className="primary"
+              onClick={() => setForm({})}
+            >
               <Plus size={16} />
               Nuevo producto / servicio
             </button>
@@ -151,7 +171,9 @@ export function ProductsPanel({
             <option value="product">Productos</option>
             <option value="service">Servicios</option>
             <option value="archived">Archivados</option>
-            <option value="trash">Papelera · Eliminados</option>
+            <option hidden={!has("trash")} value="trash">
+              Papelera · Eliminados
+            </option>
           </select>
         </div>
         {error && (
@@ -216,8 +238,10 @@ export function ProductsPanel({
                   <div className="product-card-actions">
                     {p.deleted ? (
                       <button
+                        hidden={!has("products", "delete") || !has("trash")}
                         onClick={() =>
-                          run(async () => {
+                          run(async (operation) => {
+                            operation.step("Recuperando producto");
                             onSaved(
                               await api("products/access", {
                                 id: p.id,
@@ -226,6 +250,11 @@ export function ProductsPanel({
                               }),
                             );
                             await onRefresh();
+                            operation.result(
+                              "Producto recuperado",
+                              p.code,
+                              "success",
+                            );
                           })
                         }
                       >
@@ -237,11 +266,13 @@ export function ProductsPanel({
                         <button
                           aria-label={"Editar " + p.code}
                           title="Editar"
+                          hidden={!has("products", "edit")}
                           onClick={() => setForm({ product: p })}
                         >
                           <Pencil size={16} />
                         </button>
                         <button
+                          hidden={!has("products", "create")}
                           aria-label={"Copiar " + p.code}
                           title="Copiar (sin duplicar existencias)"
                           onClick={() =>
@@ -251,12 +282,18 @@ export function ProductsPanel({
                           <Copy size={16} />
                         </button>
                         <button
+                          hidden={!has("products", "edit")}
                           disabled={busy}
                           aria-label={
                             (p.archived ? "Desarchivar " : "Archivar ") + p.code
                           }
                           onClick={() =>
-                            run(async () => {
+                            run(async (operation) => {
+                              operation.step(
+                                p.archived
+                                  ? "Desarchivando producto"
+                                  : "Archivando producto",
+                              );
                               onSaved(
                                 await api("products/archive", {
                                   id: p.id,
@@ -265,6 +302,13 @@ export function ProductsPanel({
                                 }),
                               );
                               await onRefresh();
+                              operation.result(
+                                p.archived
+                                  ? "Producto desarchivado"
+                                  : "Producto archivado",
+                                p.code,
+                                p.archived ? "success" : "warning",
+                              );
                             })
                           }
                         >
@@ -272,6 +316,7 @@ export function ProductsPanel({
                           {p.archived ? "Desarchivar" : "Archivar"}
                         </button>
                         <button
+                          hidden={!has("products", "delete")}
                           aria-label={"Eliminar " + p.code}
                           title={
                             p.reserved
@@ -320,54 +365,37 @@ export function ProductsPanel({
       </section>
       <AnimatePresence>
         {deleting && (
-          <Modal
-            title={"Eliminar " + deleting.code}
-            onClose={() => {
-              if (!busy) setDeleting(null);
-            }}
+          <ConfirmationDialog
+            title={"¿Eliminar " + deleting.code + "?"}
+            description={`Se enviará ${deleting.description} a la papelera. Se conservará su historial y podrás recuperar el producto.`}
+            busy={busy}
+            onClose={() => setDeleting(null)}
+            onConfirm={() =>
+              run(async (operation) => {
+                operation.step("Enviando producto a la papelera");
+                onSaved(
+                  await api("products/access", {
+                    id: deleting.id,
+                    version: deleting.version,
+                    deleted: true,
+                  }),
+                );
+                setDeleting(null);
+                await onRefresh();
+                operation.result(
+                  "Producto enviado a la papelera",
+                  "Puedes recuperarlo desde Papelera.",
+                  "warning",
+                );
+              })
+            }
           >
-            <div className="modal-body">
-              <p>
-                Se enviará el producto a la papelera y se conservará su
-                historial.
+            {error && (
+              <p role="alert" className="inline-error">
+                {error}
               </p>
-              <strong>{deleting.description}</strong>
-              {error && (
-                <p role="alert" className="inline-error">
-                  {error}
-                </p>
-              )}
-            </div>
-            <div className="modal-actions modal-footer">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setDeleting(null)}
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                className="danger"
-                disabled={busy}
-                onClick={() =>
-                  run(async () => {
-                    onSaved(
-                      await api("products/access", {
-                        id: deleting.id,
-                        version: deleting.version,
-                        deleted: true,
-                      }),
-                    );
-                    setDeleting(null);
-                    await onRefresh();
-                  })
-                }
-              >
-                {busy ? <Spinner /> : <Trash2 size={16} />}Enviar a papelera
-              </button>
-            </div>
-          </Modal>
+            )}
+          </ConfirmationDialog>
         )}
         {form && (
           <ProductForm

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  ShieldCheck,
   Package,
   Users,
   FileText,
@@ -11,14 +12,26 @@ import {
   Pencil,
   Trash2,
   RotateCcw,
+  ClipboardList,
+  Wrench,
+  Wallet,
+  CalendarDays,
+  Globe,
 } from "lucide-react";
+import type { BusinessSection } from "./BusinessPanel";
 import { type Doc, type Command, money, statuses } from "../shared/model";
-import { Modal, Spinner } from "./ui";
+import { ConfirmationDialog, Spinner } from "./ui";
 
+export type AdminModule =
+  "users" | "roles" | "quote" | "invoice" | "products" | BusinessSection;
 type Props = {
+  module: AdminModule;
+  onModuleChange: (module: AdminModule) => void;
+  renderBusiness: (section: BusinessSection) => ReactNode;
   documents: Doc[];
   busy: boolean;
   users: ReactNode;
+  roles: ReactNode;
   products: ReactNode;
   productCount: number;
   onOpen: (d: Doc) => void;
@@ -28,9 +41,7 @@ type Props = {
   onRefresh: () => void;
 };
 export function Administration(props: Props) {
-  const [module, setModule] = useState<
-    "users" | "quote" | "invoice" | "products"
-  >("users");
+  const module = props.module;
   return (
     <>
       <div
@@ -41,20 +52,26 @@ export function Administration(props: Props) {
         {(
           [
             { id: "users", label: "Usuarios", icon: Users },
+            { id: "roles", label: "Roles y permisos", icon: ShieldCheck },
             { id: "quote", label: "Cotizaciones", icon: FileText },
             { id: "invoice", label: "Facturas", icon: Receipt },
             { id: "products", label: "Productos", icon: Package },
+            { id: "orders", label: "Órdenes de compra", icon: ClipboardList },
+            { id: "jobs", label: "Servicios", icon: Wrench },
+            { id: "payments", label: "Cobranza", icon: Wallet },
+            { id: "agenda", label: "Agenda", icon: CalendarDays },
+            { id: "portal", label: "Portal de clientes", icon: Globe },
           ] as const
         ).map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             aria-pressed={module === id}
             className={module === id ? "chosen" : ""}
-            onClick={() => setModule(id)}
+            onClick={() => props.onModuleChange(id)}
           >
             <Icon size={20} />
             <span>{label}</span>
-            {id !== "users" && (
+            {(id === "products" || id === "quote" || id === "invoice") && (
               <small>
                 {id === "products"
                   ? props.productCount
@@ -75,10 +92,14 @@ export function Administration(props: Props) {
         >
           {module === "users" ? (
             props.users
+          ) : module === "roles" ? (
+            props.roles
           ) : module === "products" ? (
             props.products
-          ) : (
+          ) : module === "quote" || module === "invoice" ? (
             <AdminDocuments {...props} kind={module} />
+          ) : (
+            props.renderBusiness(module)
           )}
         </motion.div>
       </AnimatePresence>
@@ -286,58 +307,37 @@ function AdminDocuments({
         </p>
       </section>
       {deleting && (
-        <Modal
-          title={"Eliminar " + deleting.number}
-          onClose={() => {
-            if (!busy) setDeleting(null);
+        <ConfirmationDialog
+          title={"¿Eliminar " + deleting.number + "?"}
+          description="El documento se enviará a la papelera. Se conservará su historial y podrás recuperarlo. Las existencias asociadas se ajustarán según el documento."
+          busy={busy}
+          confirmDisabled={!reason.trim()}
+          onClose={() => setDeleting(null)}
+          onConfirm={async () => {
+            if (
+              await onCommand({
+                action: "delete",
+                id: deleting.id,
+                version: deleting.version,
+                reason,
+              })
+            )
+              setDeleting(null);
           }}
         >
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (
-                await onCommand({
-                  action: "delete",
-                  id: deleting.id,
-                  version: deleting.version,
-                  reason,
-                })
-              )
-                setDeleting(null);
-            }}
-          >
-            <div className="modal-body">
-              <p>
-                Se enviará a la papelera y se conservará su historial. Las
-                existencias asociadas se ajustarán según el documento.
-              </p>
-              <label>
-                Motivo de eliminación
-                <textarea
-                  required
-                  minLength={1}
-                  maxLength={1000}
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder="Indica por qué eliminas este documento"
-                  rows={3}
-                />
-              </label>
-            </div>
-            <div className="modal-actions modal-footer">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setDeleting(null)}
-              >
-                Cancelar
-              </button>
-              <button className="danger" disabled={busy || !reason.trim()}>
-                {busy ? <Spinner /> : <Trash2 size={16} />}Enviar a papelera
-              </button>
-            </div>
-          </form>
-        </Modal>
+          <label>
+            Motivo de eliminación
+            <textarea
+              required
+              minLength={1}
+              maxLength={1000}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Indica por qué eliminas este documento"
+              rows={3}
+            />
+          </label>
+        </ConfirmationDialog>
       )}
     </>
   );

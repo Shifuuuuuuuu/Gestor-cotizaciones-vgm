@@ -1,3 +1,4 @@
+import { usePermissions } from "./usePermissions";
 import { useEffect, useRef, useState } from "react";
 import { Search, Check } from "lucide-react";
 import { cleanRut, validRut, formatRut, type Customer } from "../shared/people";
@@ -15,6 +16,7 @@ export function RutLookup({
   onApply: (result: RutResult) => void;
   disabled?: boolean;
 }) {
+  const { has } = usePermissions();
   const [busy, setBusy] = useState(false),
     [result, setResult] = useState<RutResult | null>(null);
   const current = useRef(rut);
@@ -73,6 +75,7 @@ export function RutLookup({
   const registered = cleanRut(rut)
     ? customers.find((c) => cleanRut(c.rut) === cleanRut(rut))
     : undefined;
+  if (!has("customers")) return null;
   if (registered)
     return (
       <div className="rut-lookup rut-local" role="status">

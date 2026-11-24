@@ -1,4 +1,7 @@
+import { usePermissions } from "./usePermissions";
 import { ProductImage } from "./ProductImage";
+import { BusinessDocumentLinks } from "./BusinessDocumentLinks";
+import type { BusinessRecord } from "../shared/business";
 import { useState } from "react";
 import {
   Download,
@@ -18,8 +21,10 @@ import {
   type Event,
   type Command,
 } from "../shared/model";
-import { Modal, Spinner } from "./ui";
+import { Modal, Spinner, ConfirmationDialog } from "./ui";
 export const actionLabels: Record<string, string> = {
+  payment: "Pago registrado",
+  payment_void: "Pago anulado",
   save: "Documento guardado",
   status: "Cambio de estado",
   delete: "Enviado a papelera",
@@ -47,6 +52,7 @@ export function DocumentDetail({
   onExport,
   documents,
   onOpen,
+  onOpenBusiness,
 }: {
   doc: Doc;
   events: Event[];
@@ -54,13 +60,17 @@ export function DocumentDetail({
   onClose: () => void;
   onEdit: () => void;
   onDuplicate: () => void;
-  onCommand: (cmd: Command) => void;
+  onCommand: (cmd: Command) => Promise<boolean>;
   onExport: (format: "pdf" | "xlsx" | "docx") => void;
   documents: Doc[];
   onOpen: (doc: Doc) => void;
+  onOpenBusiness?: (record: BusinessRecord) => void;
 }) {
+  const { has } = usePermissions();
+  const scope = doc.kind === "quote" ? "quotes" : "invoices";
   const [deleting, setDeleting] = useState(false),
     [reason, setReason] = useState("");
+  const [restoringVersion, setRestoringVersion] = useState<Event | null>(null);
   const command = (cmd: Omit<Command, "id" | "version">) =>
     onCommand({ ...cmd, id: doc.id, version: doc.version });
   return (
@@ -120,25 +130,31 @@ export function DocumentDetail({
           </span>
         </div>
         <div className="actions document-tools">
-          {(["pdf", "xlsx", "docx"] as const).map((f) => (
-            <button disabled={busy} key={f} onClick={() => onExport(f)}>
-              <Download size={15} />
-              {f.toUpperCase()}
-            </button>
-          ))}
-          <button onClick={() => window.print()}>
+          {has(scope, "export") &&
+            (["pdf", "xlsx", "docx"] as const).map((f) => (
+              <button disabled={busy} key={f} onClick={() => onExport(f)}>
+                <Download size={15} />
+                {f.toUpperCase()}
+              </button>
+            ))}
+          <button hidden={!has(scope, "export")} onClick={() => window.print()}>
             <Printer size={15} />
             Imprimir
           </button>
           <div className="tools-spacer" />
           <button
             disabled={busy || doc.deleted || doc.status !== "Borrador"}
+            hidden={!has(scope, "edit")}
             onClick={onEdit}
           >
             <Pencil size={15} />
             Editar
           </button>
-          <button disabled={busy || doc.deleted} onClick={onDuplicate}>
+          <button
+            hidden={!has(scope, "create")}
+            disabled={busy || doc.deleted}
+            onClick={onDuplicate}
+          >
             <Copy size={15} />
             Duplicar
           </button>
@@ -213,6 +229,7 @@ export function DocumentDetail({
               <button
                 className="primary"
                 disabled={busy}
+                hidden={!has(scope, "delete") || !has("trash")}
                 onClick={() => command({ action: "restore" })}
               >
                 <RotateCcw size={16} />
@@ -220,30 +237,43 @@ export function DocumentDetail({
               </button>
             ) : (
               <>
-                {transitions[doc.kind][doc.status].map((s) => (
-                  <button
-                    className={"state-button state-" + s}
-                    disabled={busy}
-                    key={s}
-                    onClick={() => command({ action: "status", status: s })}
-                  >
-                    {busy ? <Spinner /> : <ArrowRight size={15} />}{" "}
-                    {stateLabels[s]}
-                  </button>
-                ))}
-                {doc.kind === "quote" && doc.status === "Aceptada" && (
-                  <button
-                    className="primary"
-                    disabled={busy}
-                    onClick={() => command({ action: "convert" })}
-                  >
-                    {busy ? <Spinner /> : <Receipt size={16} />}Generar factura
-                  </button>
-                )}
+                {transitions[doc.kind][doc.status]
+                  .filter(
+                    (s) =>
+                      has(scope, "approve") &&
+                      (s !== "Pagada" || has("collections", "approve")),
+                  )
+                  .map((s) => (
+                    <button
+                      className={"state-button state-" + s}
+                      disabled={busy}
+                      key={s}
+                      onClick={() => command({ action: "status", status: s })}
+                    >
+                      {busy ? <Spinner /> : <ArrowRight size={15} />}{" "}
+                      {stateLabels[s]}
+                    </button>
+                  ))}
+                {doc.kind === "quote" &&
+                  doc.status === "Aceptada" &&
+                  has("invoices", "create") && (
+                    <button
+                      className="primary"
+                      disabled={busy}
+                      onClick={() => command({ action: "convert" })}
+                    >
+                      {busy ? <Spinner /> : <Receipt size={16} />}Generar
+                      factura
+                    </button>
+                  )}
                 <button
                   className="danger"
+                  hidden={!has(scope, "delete")}
                   disabled={busy}
-                  onClick={() => setDeleting(!deleting)}
+                  onClick={() => {
+                    setReason("");
+                    setDeleting(true);
+                  }}
                 >
                   <Trash2 size={15} />
                   Eliminar
@@ -252,36 +282,33 @@ export function DocumentDetail({
             )}
           </div>
           {deleting && !doc.deleted && (
-            <form
-              className="delete-confirm"
-              onSubmit={(e) => {
-                e.preventDefault();
-                command({ action: "delete", reason });
-                setDeleting(false);
+            <ConfirmationDialog
+              title={"¿Eliminar " + doc.number + "?"}
+              description="El documento se enviará a la papelera. Se conservará su historial y podrás recuperarlo. Las existencias asociadas se ajustarán según el documento."
+              busy={busy}
+              confirmDisabled={!reason.trim()}
+              onClose={() => setDeleting(false)}
+              onConfirm={async () => {
+                if (await command({ action: "delete", reason }))
+                  setDeleting(false);
               }}
             >
               <label>
                 Motivo de eliminación
-                <input
+                <textarea
                   required
+                  maxLength={1000}
+                  rows={3}
                   placeholder="Por ejemplo: documento duplicado"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                 />
               </label>
-              <small>
-                Se conservará el documento en la papelera y su historial.
-              </small>
-              <button type="button" onClick={() => setDeleting(false)}>
-                Cancelar
-              </button>
-              <button className="danger" disabled={busy}>
-                Enviar a papelera
-              </button>
-            </form>
+            </ConfirmationDialog>
           )}
         </div>
-        <h3 className="history-title">
+        <BusinessDocumentLinks doc={doc} onOpen={onOpenBusiness} />
+        <h3 hidden={!has("history")} className="history-title">
           <History size={17} />
           Historial y versiones
         </h3>
@@ -306,19 +333,14 @@ export function DocumentDetail({
                   )}
                 </pre>
               </details>
-              {!doc.deleted &&
+              {has(scope, "edit") &&
+                has("history") &&
+                !doc.deleted &&
                 doc.status === "Borrador" &&
                 e.after.version !== doc.version && (
                   <button
                     disabled={busy}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          "¿Recuperar el contenido de esta versión? Se guardará como una versión nueva.",
-                        )
-                      )
-                        command({ action: "version", eventId: e.id });
-                    }}
+                    onClick={() => setRestoringVersion(e)}
                   >
                     <RotateCcw size={13} />
                     Recuperar contenido de v{e.after.version}
@@ -327,6 +349,24 @@ export function DocumentDetail({
             </div>
           ))}
       </div>
+      {restoringVersion && (
+        <ConfirmationDialog
+          title={
+            "¿Recuperar la versión " + restoringVersion.after.version + "?"
+          }
+          description="El contenido seleccionado se guardará como una versión nueva. Se conservará el historial del documento."
+          tone="warning"
+          confirmLabel="Sí, recuperar versión"
+          busy={busy}
+          onClose={() => setRestoringVersion(null)}
+          onConfirm={async () => {
+            if (
+              await command({ action: "version", eventId: restoringVersion.id })
+            )
+              setRestoringVersion(null);
+          }}
+        />
+      )}
     </Modal>
   );
 }

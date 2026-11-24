@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { beginFeedback, notify } from "./feedback";
 import { UploadCloud, Download, CheckCircle2, AlertCircle } from "lucide-react";
 import { motion } from "motion/react";
 import { Modal, Spinner } from "./ui";
@@ -49,6 +50,11 @@ export function ProductImport({
       file.size > 5 * 1024 * 1024
     ) {
       setErrors(["Usa un archivo .xlsx de hasta 5 MB."]);
+      notify(
+        "Revisa el archivo",
+        "Usa un archivo .xlsx de hasta 5 MB.",
+        "warning",
+      );
       setPhase("select");
       return;
     }
@@ -64,12 +70,22 @@ export function ProductImport({
       const timeout = setTimeout(() => {
         w.terminate();
         setErrors(["El archivo demoró demasiado. Reduce su tamaño."]);
+        notify(
+          "No se pudo leer el archivo",
+          "El archivo demoró demasiado. Reduce su tamaño.",
+          "error",
+        );
         setPhase("select");
       }, 15000);
       w.onerror = () => {
         clearTimeout(timeout);
         w.terminate();
         setErrors(["No se pudo leer el archivo."]);
+        notify(
+          "No se pudo leer el archivo",
+          "Intenta seleccionar nuevamente el Excel.",
+          "error",
+        );
         setPhase("select");
       };
       w.onmessage = (event) => {
@@ -77,6 +93,7 @@ export function ProductImport({
         w.terminate();
         if (!event.data.ok) {
           setErrors([event.data.error]);
+          notify("Revisa el archivo Excel", event.data.error, "warning");
           setPhase("select");
           return;
         }
@@ -86,15 +103,26 @@ export function ProductImport({
           .map((r) => "El código " + r.code + " ya existe en el catálogo.");
         setRows(imported);
         setErrors([...event.data.errors, ...conflicts]);
+        if (event.data.errors.length || conflicts.length)
+          notify(
+            "La importación necesita revisión",
+            "Corrige los errores de la vista previa antes de guardar productos.",
+            "warning",
+          );
         setPhase("preview");
       };
       w.postMessage(buffer, [buffer]);
     } catch (e) {
       setErrors([(e as Error).message]);
+      notify("No se pudo leer el archivo", (e as Error).message, "error");
       setPhase("select");
     }
   }
   async function upload() {
+    const operation = beginFeedback(
+      "Importando productos",
+      "Guardando productos por lotes",
+    );
     setPhase("uploading");
     setErrors([]);
     try {
@@ -105,12 +133,31 @@ export function ProductImport({
         });
         cursor.current = Math.min(offset + 25, rows.length);
         setDone(cursor.current);
+        operation.describe(
+          cursor.current +
+            " de " +
+            rows.length +
+            " productos confirmados por el servidor.",
+        );
       }
+      operation.step("Actualizando catálogo");
       await onImported();
       setPhase("done");
+      operation.success(
+        "Productos importados",
+        rows.length + " productos guardados correctamente.",
+      );
     } catch (e) {
       setErrors([(e as Error).message]);
       setPhase("error");
+      operation.error(
+        new Error(
+          (e as Error).message +
+            " " +
+            cursor.current +
+            " productos ya confirmados se conservan; puedes reintentar desde el último lote.",
+        ),
+      );
       await onImported().catch(() => {});
     }
   }

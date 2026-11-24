@@ -1,0 +1,290 @@
+.business-page {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.business-form select,
+.business-portal-settings select,
+.client-portal select {
+  width: 100%;
+}
+.business-note {
+  margin: 18px 0;
+  padding: 16px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.business-note input {
+  margin: 12px 0;
+}
+.business-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+}
+.business-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex-shrink: 0;
+}
+.business-form > .business-checkbox {
+  margin-top: 22px;
+}
+.business-subsection {
+  grid-column: 1 / -1;
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.business-subsection > h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.business-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(155px, 100%), 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.business-kpis > div {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--soft);
+  min-width: 0;
+}
+.business-kpis strong {
+  display: block;
+  font-size: 21px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.business-definition {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+.business-definition > div {
+  min-width: 0;
+}
+.business-definition dt {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.business-definition dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.business-file-list {
+  list-style: none;
+  padding: 0;
+  margin: 18px 0;
+}
+.business-file-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.business-file-list li > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.business-file-list strong {
+  font-size: 12px;
+}
+.business-file-list small {
+  margin-top: 5px;
+}
+.business-file-list button {
+  font-size: 11px;
+}
+.business-check-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.business-check-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+.business-material {
+  padding: 14px;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.business-checklist {
+  list-style: none;
+  padding: 0;
+  line-height: 2;
+}
+.business-finance,
+.business-agenda,
+.business-portal-settings {
+  padding: 0 22px 22px;
+  min-width: 0;
+}
+.business-agenda-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  margin-top: 10px;
+  padding: 16px;
+  gap: 20px;
+}
+.business-agenda-item > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.business-agenda-item > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.business-agenda-item.overdue {
+  border-left: 3px solid #cc6255;
+}
+.business-portal-settings {
+  padding-top: 22px;
+}
+.business-prewrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.client-portal {
+  min-height: 100dvh;
+}
+.client-portal-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 18px 28px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.client-portal-header > div:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.client-portal-main {
+  width: min(1200px, 100%);
+  margin: 0 auto;
+  padding: 36px 24px;
+}
+.client-portal-main > p {
+  margin: 12px 0 24px;
+}
+.business-portal-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 25px 0;
+}
+.business-client-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(270px, 100%), 1fr));
+  gap: 16px;
+  padding: 22px;
+}
+.business-client-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+.business-client-card h3 {
+  overflow-wrap: anywhere;
+}
+.business-client-document {
+  padding: 16px;
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.business-client-document p {
+  margin: 12px 0;
+}
+@media (max-width: 720px) {
+  .business-definition {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .business-file-list li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .business-file-list .catalog-actions {
+    width: 100%;
+  }
+  .business-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .business-finance,
+  .business-agenda,
+  .business-portal-settings {
+    padding: 16px;
+  }
+  .business-agenda-item {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .business-agenda-item > div {
+    flex: 1 1 100%;
+  }
+  .client-portal-header {
+    padding: 14px 16px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .client-portal-main {
+    margin: 0;
+    width: 100%;
+    padding: 24px 12px;
+  }
+  .business-client-cards {
+    padding: 16px;
+  }
+  .business-check-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .business-check-row > button {
+    grid-column: 2;
+  }
+}
+@media (max-width: 420px) {
+  .business-kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .client-portal-header .vgm-brand {
+    flex: 1 1 100%;
+  }
+  .client-portal-main h1 {
+    font-size: 26px;
+  }
+}

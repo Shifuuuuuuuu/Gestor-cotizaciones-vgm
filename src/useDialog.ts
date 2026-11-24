@@ -51,10 +51,21 @@ export function useDialog(
     document.addEventListener("keydown", handler);
     return () => {
       document.removeEventListener("keydown", handler);
+      const wasTop = stack.at(-1) === dialog;
       const index = stack.indexOf(dialog);
       if (index >= 0) stack.splice(index, 1);
       if (!stack.length) document.body.style.overflow = originalOverflow;
-      if (previous?.isConnected) previous.focus();
+      const top = stack.at(-1);
+      if (wasTop && previous?.isConnected && (!top || top.contains(previous)))
+        previous.focus();
+      else if (wasTop && top)
+        Array.from(
+          top.querySelectorAll<HTMLElement>(
+            'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]',
+          ),
+        )
+          .find((element) => element.getClientRects().length > 0)
+          ?.focus();
     };
   }, [active, ref]);
 }

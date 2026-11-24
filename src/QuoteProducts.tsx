@@ -1,3 +1,4 @@
+import { usePermissions } from "./usePermissions";
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Plus, Trash2, X, Package } from "lucide-react";
@@ -25,6 +26,7 @@ export function QuoteProducts({
   documents: Doc[];
   onSaved: (p: Product) => void;
 }) {
+  const { has } = usePermissions();
   const [open, setOpen] = useState<number | null>(null),
     [query, setQuery] = useState(""),
     [quick, setQuick] = useState<number | null>(null),
@@ -108,6 +110,9 @@ export function QuoteProducts({
             >
               <div className="line-item">
                 <div className="product-description">
+                  <span className="mobile-field-label" aria-hidden="true">
+                    Descripción / Buscar en catálogo
+                  </span>
                   <input
                     required
                     maxLength={500}
@@ -192,6 +197,7 @@ export function QuoteProducts({
                         )}
                       </div>
                       <button
+                        hidden={!has("products", "create")}
                         type="button"
                         className="picker-create"
                         disabled={items.length >= 100}
@@ -207,36 +213,50 @@ export function QuoteProducts({
                   )}
                 </div>
                 {(["quantity", "price", "discount"] as const).map((key) => (
-                  <input
-                    key={key}
-                    aria-label={
+                  <label className="line-number-field" key={key}>
+                    <span className="mobile-field-label">
                       {
-                        quantity: "Cantidad",
-                        price: "Precio",
-                        discount: "Descuento",
-                      }[key] +
-                      " línea " +
-                      (index + 1)
-                    }
-                    required
-                    type="number"
-                    step={key === "quantity" ? ".001" : ".01"}
-                    min={key === "quantity" ? ".001" : 0}
-                    max={
-                      key === "discount"
-                        ? 100
-                        : key === "quantity"
-                          ? 100000
-                          : 100000000
-                    }
-                    value={item[key]}
-                    onFocus={() => setOpen(null)}
-                    onChange={(e) => {
-                      const next = [...items];
-                      next[index] = { ...item, [key]: Number(e.target.value) };
-                      onChange(next);
-                    }}
-                  />
+                        {
+                          quantity: "Cantidad",
+                          price: "Precio CLP",
+                          discount: "Desc. %",
+                        }[key]
+                      }
+                    </span>
+                    <input
+                      aria-label={
+                        {
+                          quantity: "Cantidad",
+                          price: "Precio",
+                          discount: "Descuento",
+                        }[key] +
+                        " línea " +
+                        (index + 1)
+                      }
+                      required
+                      type="number"
+                      inputMode="decimal"
+                      step={key === "quantity" ? ".001" : ".01"}
+                      min={key === "quantity" ? ".001" : 0}
+                      max={
+                        key === "discount"
+                          ? 100
+                          : key === "quantity"
+                            ? 100000
+                            : 100000000
+                      }
+                      value={item[key]}
+                      onFocus={() => setOpen(null)}
+                      onChange={(e) => {
+                        const next = [...items];
+                        next[index] = {
+                          ...item,
+                          [key]: Number(e.target.value),
+                        };
+                        onChange(next);
+                      }}
+                    />
+                  </label>
                 ))}
                 <button
                   type="button"
@@ -325,6 +345,7 @@ export function QuoteProducts({
           Agregar línea
         </button>
         <button
+          hidden={!has("products", "create")}
           type="button"
           disabled={items.length >= 100}
           onClick={() => setQuick(items.length)}

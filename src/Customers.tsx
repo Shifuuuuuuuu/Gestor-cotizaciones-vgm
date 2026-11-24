@@ -1,3 +1,4 @@
+import { usePermissions } from "./usePermissions";
 import { formatContactField, formatPhone } from "../shared/people";
 import { RutLookup } from "./RutLookup";
 import { useState } from "react";
@@ -12,7 +13,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { cleanRut, validRut, type Customer } from "../shared/people";
-import { Modal, Spinner } from "./ui";
+import { Modal, Spinner, ConfirmationDialog } from "./ui";
 export function CustomerPanel({
   customers,
   busy,
@@ -22,10 +23,16 @@ export function CustomerPanel({
   customers: Customer[];
   busy: boolean;
   onSave: (data: Customer) => Promise<boolean>;
-  onAccess: (customer: Customer, active: boolean, deleted: boolean) => void;
+  onAccess: (
+    customer: Customer,
+    active: boolean,
+    deleted: boolean,
+  ) => Promise<boolean>;
 }) {
+  const { has } = usePermissions();
   const [search, setSearch] = useState(""),
     [form, setForm] = useState<Customer | null>(null),
+    [deletingCustomer, setDeletingCustomer] = useState<Customer | null>(null),
     [filter, setFilter] = useState("Todos");
   const filtered = customers.filter(
     (c) =>
@@ -51,6 +58,7 @@ export function CustomerPanel({
           </div>
           <button
             className="primary"
+            hidden={!has("customers", "create")}
             onClick={() =>
               setForm({
                 id: "",
@@ -84,7 +92,12 @@ export function CustomerPanel({
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           >
-            {["Todos", "Activos", "Bloqueados", "Eliminados"].map((f) => (
+            {[
+              "Todos",
+              "Activos",
+              "Bloqueados",
+              ...(has("trash") ? ["Eliminados"] : []),
+            ].map((f) => (
               <option key={f}>{f}</option>
             ))}
           </select>
@@ -97,6 +110,7 @@ export function CustomerPanel({
                   <Building2 size={18} />
                 </span>
                 <button
+                  hidden={!has("customers", "edit")}
                   disabled={c.deleted || busy}
                   className="icon-button"
                   aria-label={"Editar cliente " + c.name}
@@ -126,6 +140,11 @@ export function CustomerPanel({
                 {c.deleted ? (
                   <button
                     disabled={busy}
+                    hidden={
+                      !has("customers", "delete") ||
+                      !has("customers", "edit") ||
+                      !has("trash")
+                    }
                     onClick={() => onAccess(c, false, false)}
                   >
                     <RotateCcw size={14} />
@@ -135,6 +154,7 @@ export function CustomerPanel({
                   <>
                     <button
                       disabled={busy}
+                      hidden={!has("customers", "edit")}
                       onClick={() => onAccess(c, !c.active, false)}
                     >
                       {c.active ? (
@@ -147,14 +167,8 @@ export function CustomerPanel({
                     <button
                       className="danger"
                       disabled={busy}
-                      onClick={() => {
-                        if (
-                          confirm(
-                            `¿Eliminar a ${c.name}? Sus documentos se conservarán y podrás recuperar el cliente.`,
-                          )
-                        )
-                          onAccess(c, false, true);
-                      }}
+                      hidden={!has("customers", "delete")}
+                      onClick={() => setDeletingCustomer(c)}
                     >
                       <Trash2 size={14} />
                       Eliminar
@@ -173,6 +187,18 @@ export function CustomerPanel({
           </div>
         )}
       </section>
+      {deletingCustomer && (
+        <ConfirmationDialog
+          title="¿Eliminar cliente?"
+          description={`Se enviará a ${deletingCustomer.name} a la papelera. Sus documentos se conservarán y podrás recuperar el cliente.`}
+          busy={busy}
+          onClose={() => setDeletingCustomer(null)}
+          onConfirm={async () => {
+            if (await onAccess(deletingCustomer, false, true))
+              setDeletingCustomer(null);
+          }}
+        />
+      )}
       {form && (
         <Modal
           title={form.id ? "Editar cliente" : "Nuevo cliente"}

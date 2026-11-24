@@ -9,6 +9,12 @@ import { getAuth } from "firebase-admin/auth";
 import { cloud, list } from "./store";
 import { jsonFile } from "./jsonFile";
 import {
+  initializeAccess,
+  requireRole,
+  withAccessLock,
+  readRoleForTransaction,
+} from "./access";
+import {
   profileSchema,
   customerSchema,
   cleanRut,
@@ -69,6 +75,7 @@ const customers = jsonFile<Customer[]>("customers.json", async () => {
   return [...map.values()];
 });
 export async function initializeUsers() {
+  await initializeAccess();
   if (!cloud) {
     await localUsers.update(() => {});
     await customers.update(() => {});
@@ -147,6 +154,16 @@ export async function createUser(
   password: string,
   role: Profile["role"],
 ) {
+  return withAccessLock(async () => {
+    await requireRole(role);
+    return createUserRecord(input, password, role);
+  });
+}
+async function createUserRecord(
+  input: unknown,
+  password: string,
+  role: Profile["role"],
+) {
   const data = profileSchema.parse(input);
   if (password.length < 8)
     throw new Error("La contraseña debe tener al menos 8 caracteres.");
@@ -166,7 +183,12 @@ export async function createUser(
     });
     const profile = make(user.uid);
     try {
-      await getFirestore().doc(`users/${user.uid}`).set(profile);
+      const db = getFirestore();
+      await db.runTransaction(async (t) => {
+        const access = await readRoleForTransaction(t, role);
+        t.create(db.doc(`users/${user.uid}`), profile);
+        t.set(access.lock, { version: access.generation });
+      });
     } catch (e) {
       await getAuth().deleteUser(user.uid);
       throw e;
@@ -188,12 +210,25 @@ export async function changeAccess(
   actorId: string,
   deleted?: boolean,
 ) {
+  return withAccessLock(async () => {
+    await requireRole(role);
+    return changeAccessRecord(id, role, active, actorId, deleted);
+  });
+}
+async function changeAccessRecord(
+  id: string,
+  role: Profile["role"],
+  active: boolean,
+  actorId: string,
+  deleted?: boolean,
+) {
   if (id === actorId)
     throw new Error(
       "No puedes modificar tu propio acceso desde administración.",
     );
   if (cloud) {
     return getFirestore().runTransaction(async (t) => {
+      const access = await readRoleForTransaction(t, role);
       const ref = getFirestore().doc(`users/${id}`),
         snap = await t.get(ref);
       if (!snap.exists) throw new Error("Usuario inexistente");
@@ -221,6 +256,7 @@ export async function changeAccess(
             }),
       };
       t.update(ref, patch);
+      t.set(access.lock, { version: access.generation });
       return { ...snap.data(), ...patch };
     });
   }

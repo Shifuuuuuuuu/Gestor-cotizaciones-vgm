@@ -8,7 +8,19 @@ export function download(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-export async function exportDoc(d: Doc, format: "pdf" | "xlsx" | "docx") {
+export async function exportDoc(
+  d: Doc,
+  format: "pdf" | "xlsx" | "docx",
+  progress: (step: string) => void = () => {},
+  options: { resolveImage?: (url: string) => string } = {},
+) {
+  if (typeof window !== "undefined" && !options.resolveImage) {
+    const { api } = await import("./api");
+    await api("access/check", {
+      module: d.kind === "quote" ? "quotes" : "invoices",
+      action: "export",
+    });
+  }
   if (d.pending)
     throw new Error(
       "Sincroniza el borrador antes de exportar el documento final con su correlativo.",
@@ -21,10 +33,15 @@ export async function exportDoc(d: Doc, format: "pdf" | "xlsx" | "docx") {
     Math.round(i.quantity * i.price * (1 - i.discount / 100)),
   ]);
   const title = `${d.kind === "quote" ? "Cotización" : "Factura interna"} ${d.number}`;
+  progress("Preparando archivo " + format.toUpperCase());
   if (format === "pdf") {
     const { createQuotationPdf, loadPdfAssets } =
       await import("./quotationPdf");
-    const pdf = createQuotationPdf(d, await loadPdfAssets(d));
+    progress("Cargando imágenes y datos del PDF");
+    const assets = await loadPdfAssets(d, options.resolveImage);
+    progress("Creando PDF");
+    const pdf = createQuotationPdf(d, assets);
+    progress("Iniciando descarga del PDF");
     pdf.save(d.number + ".pdf");
   } else if (format === "xlsx") {
     const { default: ExcelJS } = await import("exceljs");
@@ -64,6 +81,7 @@ export async function exportDoc(d: Doc, format: "pdf" | "xlsx" | "docx") {
       fgColor: { argb: "FF686963" },
     };
     sheet.views = [{ state: "frozen", ySplit: 10 }];
+    progress("Creando archivo Excel");
     download(
       new Blob([(await book.xlsx.writeBuffer()) as ArrayBuffer]),
       d.number + ".xlsx",
@@ -121,6 +139,7 @@ export async function exportDoc(d: Doc, format: "pdf" | "xlsx" | "docx") {
         },
       ],
     });
+    progress("Creando documento Word");
     download(await Packer.toBlob(doc), d.number + ".docx");
   }
 }

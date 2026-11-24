@@ -18,6 +18,45 @@ import {
   setPendingError,
 } from "./offlineStore";
 import type { Command } from "../shared/model";
+import { accessState, setAccessUser } from "./accessState";
+import { can } from "../shared/access";
+function permittedCache(path: string, data: any) {
+  const user = accessState.getSnapshot();
+  if (path === "customers")
+    return can(user, "customers")
+      ? data.filter((c: any) => !c.deleted || can(user, "trash"))
+      : [];
+  if (path === "users" && user?.role !== "admin") return [];
+  if (path === "products" && data)
+    return {
+      ...data,
+      products: can(user, "products")
+        ? data.products.filter((p: any) => !p.deleted || can(user, "trash"))
+        : [],
+      movements: can(user, "products") ? (data.movements ?? []) : [],
+      stockMovements: can(user, "products") ? (data.stockMovements ?? []) : [],
+    };
+  if (path !== "data" || !data) return data;
+  const documents = data.documents.filter(
+    (d: any) =>
+      can(user, d.kind === "quote" ? "quotes" : "invoices") &&
+      (!d.deleted || can(user, "trash")),
+  );
+  const ids = new Set(documents.map((d: any) => d.id));
+  return {
+    ...data,
+    documents,
+    events: can(user, "history")
+      ? data.events.filter((e: any) => ids.has(e.documentId))
+      : [],
+    products: can(user, "products")
+      ? (data.products ?? []).filter(
+          (p: any) => !p.deleted || can(user, "trash"),
+        )
+      : [],
+    stockMovements: can(user, "products") ? (data.stockMovements ?? []) : [],
+  };
+}
 export const auth = import.meta.env.VITE_FIREBASE_API_KEY
   ? getAuth(
       initializeApp({
@@ -77,9 +116,12 @@ async function request(path: string, body?: unknown) {
   connection(true);
   const data = await res.json();
   if (res.status === 401 && path !== "login") {
+    setAccessUser(null);
     await forgetSession();
     window.dispatchEvent(new Event("vgm-session-expired"));
   }
+  if (res.status === 403)
+    window.dispatchEvent(new Event("vgm-permissions-changed"));
   if (!res.ok)
     throw new ApiError(
       data.error ?? "No se pudo completar la operación.",
@@ -97,6 +139,8 @@ export async function synchronize() {
     if (!queue.length) return;
     try {
       const me = await request("me");
+      setAccessUser(me);
+      await rememberSession(me, storageMode);
       if (me.id !== current.profile.id)
         throw new Error(
           "La cuenta actual no coincide con los documentos pendientes.",
@@ -153,9 +197,23 @@ export async function synchronize() {
   });
   return synchronizing;
 }
-export async function api(path: string, body?: any): Promise<any> {
+export async function api(
+  path: string,
+  body?: any,
+  options?: { onQueued?: (id: string) => void },
+): Promise<any> {
   if (path === "commands" && body?.action === "save") {
+    const me = await api("me");
+    if (
+      !can(
+        me,
+        body.data?.kind === "invoice" ? "invoices" : "quotes",
+        body.id ? "edit" : "create",
+      )
+    )
+      throw new Error("No tienes permiso para guardar este documento.");
     const pending = await enqueue(body as Command);
+    options?.onQueued?.(pending.doc.id);
     await synchronize();
     const state = await cached("data");
     return (
@@ -171,6 +229,7 @@ export async function api(path: string, body?: any): Promise<any> {
       "Sincroniza los cambios pendientes de este documento antes de cambiar su estado, eliminarlo o facturarlo.",
     );
   if (path === "logout") {
+    setAccessUser(null);
     localStorage.setItem("vgm-logout-pending", "true");
     await forgetSession();
     localStorage.setItem("vgm-logout-event", String(Date.now()));
@@ -186,22 +245,25 @@ export async function api(path: string, body?: any): Promise<any> {
   try {
     const data = await request(path, body);
     if (path === "config") storageMode = data.mode;
-    if (path === "me" && body === undefined)
+    if (path === "me") {
+      setAccessUser(data);
       await rememberSession(data, storageMode);
+    }
     if (
       body === undefined &&
       ["data", "customers", "products", "users"].includes(path)
     ) {
       await cacheResponse(path, data);
-      return path === "data" ? await cached(path) : data;
+      return permittedCache(path, path === "data" ? await cached(path) : data);
     }
     return data;
   } catch (e) {
     if (e instanceof ConnectionError && body === undefined) {
       const fallback = await cached(path);
       if (fallback !== undefined) {
+        if (path === "me") setAccessUser(fallback);
         if (path === "config") storageMode = fallback.mode;
-        return fallback;
+        return permittedCache(path, fallback);
       }
     }
     if (e instanceof ConnectionError && body !== undefined)

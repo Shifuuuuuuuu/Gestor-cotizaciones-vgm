@@ -1,7 +1,15 @@
+import "dotenv/config";
 import { archiveProduct } from "./store";
+import { businessRouter, portalRouter } from "./businessRoutes";
+import { resolveProfile, listRoles, saveRole, archiveRole } from "./access";
+import { authorizeApi, filterDocumentData } from "./authorization";
+import {
+  can,
+  accessModules,
+  actionLabels as permissionActionLabels,
+} from "../shared/access";
 import { lookupSre } from "./rutLookup";
 import { cleanRut, validRut, formatRut } from "../shared/people";
-import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
@@ -102,6 +110,7 @@ app.post("/api/logout", async (req, res, next) => {
     next(e);
   }
 });
+app.use("/api/portal", portalRouter);
 app.use("/api", async (req, res, next) => {
   try {
     let user: Profile | undefined;
@@ -118,17 +127,69 @@ app.use("/api", async (req, res, next) => {
     }
     if (!user?.active || user.deleted)
       return res.status(401).json({ error: "Inicia sesión para continuar." });
-    res.locals.user = user;
+    res.locals.user = await resolveProfile(user);
     res.locals.actor = `${user.name} (${user.email})`;
     next();
   } catch {
     res.status(401).json({ error: "Inicia sesión con una cuenta autorizada." });
   }
 });
+app.use("/api", authorizeApi);
+app.get("/api/roles", async (_req, res, next) => {
+  try {
+    res.json(await listRoles());
+  } catch (e) {
+    next(e);
+  }
+});
+app.post("/api/roles", async (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        action: z.enum(["save", "archive"]),
+        id: z.string().max(100).optional(),
+        version: z.number().int().positive().optional(),
+        data: z.unknown().optional(),
+        deleted: z.boolean().optional(),
+      })
+      .parse(req.body);
+    res.json(
+      body.action === "save"
+        ? await saveRole(body.data, body.id, body.version, res.locals.actor)
+        : await archiveRole(
+            z.string().min(1).parse(body.id),
+            z.number().int().positive().parse(body.version),
+            z.boolean().parse(body.deleted),
+            res.locals.actor,
+            listUsers,
+          ),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+app.post("/api/access/check", (req, res) => {
+  z.object({
+    module: z.enum(accessModules.map((m) => m.id)),
+    action: z.enum(
+      Object.keys(permissionActionLabels) as [
+        keyof typeof permissionActionLabels,
+        ...(keyof typeof permissionActionLabels)[],
+      ],
+    ),
+  }).parse(req.body);
+  res.json({ ok: true });
+});
+app.use("/api", businessRouter);
 app.get("/api/products", async (_req, res, next) => {
   try {
     const state = await list();
-    res.json({ products: state.products, movements: state.stockMovements });
+    res.json({
+      products: state.products.filter(
+        (p) => !p.deleted || can(res.locals.user, "trash"),
+      ),
+      movements: state.stockMovements,
+    });
   } catch (e) {
     next(e);
   }
@@ -235,14 +296,16 @@ app.get("/api/images/:id", async (req, res, next) => {
 app.get("/api/me", (_req, res) => res.json(res.locals.user));
 app.post("/api/me", async (req, res, next) => {
   try {
-    res.json(await saveProfile(res.locals.user.id, req.body));
+    res.json(
+      await resolveProfile(await saveProfile(res.locals.user.id, req.body)),
+    );
   } catch (e) {
     next(e);
   }
 });
 app.get("/api/data", async (_req, res, next) => {
   try {
-    res.json(await list());
+    res.json(filterDocumentData(res.locals.user, await list()));
   } catch (e) {
     next(e);
   }
@@ -324,7 +387,11 @@ app.post(
 );
 app.get("/api/customers", async (_req, res, next) => {
   try {
-    res.json(await listCustomers());
+    res.json(
+      (await listCustomers()).filter(
+        (c) => !c.deleted || can(res.locals.user, "trash"),
+      ),
+    );
   } catch (e) {
     next(e);
   }
@@ -358,7 +425,7 @@ app.use("/api/users", (_req, res, next) => {
 });
 app.get("/api/users", async (_req, res, next) => {
   try {
-    res.json(await listUsers());
+    res.json(await Promise.all((await listUsers()).map(resolveProfile)));
   } catch (e) {
     next(e);
   }
@@ -369,7 +436,7 @@ app.post("/api/users", async (req, res, next) => {
       .object({
         profile: z.unknown(),
         password: z.string().min(8).max(200),
-        role: z.enum(["admin", "member"]),
+        role: z.string().min(1).max(100),
       })
       .parse(req.body);
     res.json(await createUser(body.profile, body.password, body.role));
@@ -406,7 +473,7 @@ app.post("/api/users/access", async (req, res, next) => {
     const body = z
       .object({
         id: z.string().min(1).max(128),
-        role: z.enum(["admin", "member"]),
+        role: z.string().min(1).max(100),
         active: z.boolean(),
       })
       .parse(req.body);
@@ -417,6 +484,11 @@ app.post("/api/users/access", async (req, res, next) => {
     next(e);
   }
 });
+app.get("/portal/:token", (_req, res) => {
+  res
+    .set("Referrer-Policy", "no-referrer")
+    .sendFile(resolve("dist/index.html"));
+});
 app.use(express.static(resolve("dist")));
 app.use(
   (
@@ -426,12 +498,17 @@ app.use(
     _next: express.NextFunction,
   ) => {
     console.error(err.message);
-    res.status(err.message.startsWith("CONFLICT") ? 409 : 400).json({
-      error:
-        err instanceof z.ZodError
-          ? err.issues.map((i) => i.message).join("; ")
-          : err.message,
-    });
+    res
+      .status(
+        (err as Error & { status?: number }).status ??
+          (err.message.startsWith("CONFLICT") ? 409 : 400),
+      )
+      .json({
+        error:
+          err instanceof z.ZodError
+            ? err.issues.map((i) => i.message).join("; ")
+            : err.message,
+      });
   },
 );
 if (!cloud && process.env.NODE_ENV === "production")

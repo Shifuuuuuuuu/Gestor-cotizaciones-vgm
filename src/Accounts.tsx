@@ -1,3 +1,4 @@
+import type { AccessRole } from "../shared/access";
 import { useState } from "react";
 import { motion } from "motion/react";
 import {
@@ -12,7 +13,7 @@ import {
   Plus,
 } from "lucide-react";
 import { formatContactField, type Profile } from "../shared/people";
-import { Brand, Spinner, Modal } from "./ui";
+import { Brand, Spinner, Modal, ConfirmationDialog } from "./ui";
 export function Login({
   mode,
   busy,
@@ -245,6 +246,7 @@ export function ProfilePanel({
 }
 export function AdminPanel({
   users,
+  roles,
   current,
   busy,
   onCreate,
@@ -253,6 +255,7 @@ export function AdminPanel({
   onEdit,
   cloud,
 }: {
+  roles: AccessRole[];
   cloud: boolean;
   onEdit: (id: string, profile: Profile) => Promise<boolean>;
   onDelete: (u: Profile) => Promise<boolean>;
@@ -312,7 +315,9 @@ export function AdminPanel({
                   </td>
                   <td>
                     <span className="badge">
-                      {u.role === "admin" ? "Admin" : "Usuario"}
+                      {u.roleName ??
+                        roles.find((r) => r.id === u.role)?.name ??
+                        u.role}
                     </span>
                   </td>
                   <td>
@@ -349,8 +354,13 @@ export function AdminPanel({
                           )
                         }
                       >
-                        <option value="member">Usuario</option>
-                        <option value="admin">Admin</option>
+                        {roles
+                          .filter((r) => !r.deleted)
+                          .map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))}
                       </select>
                       <button
                         disabled={busy || u.id === current.id}
@@ -367,33 +377,15 @@ export function AdminPanel({
         </div>
       </section>
       {deletingUser && (
-        <Modal
-          title="Eliminar usuario"
-          onClose={() => {
-            if (!busy) setDeletingUser(null);
+        <ConfirmationDialog
+          title="¿Eliminar usuario?"
+          description={`Se enviará a ${deletingUser.name} a la papelera y se desactivará su acceso. Su historial se conservará y podrás recuperar su cuenta.`}
+          busy={busy}
+          onClose={() => setDeletingUser(null)}
+          onConfirm={async () => {
+            if (await onDelete(deletingUser)) setDeletingUser(null);
           }}
-        >
-          <div className="modal-body">
-            <p>
-              Se enviará a {deletingUser.name} a la papelera y se desactivará su
-              acceso. Su historial se conservará.
-            </p>
-          </div>
-          <div className="modal-actions modal-footer">
-            <button disabled={busy} onClick={() => setDeletingUser(null)}>
-              Cancelar
-            </button>
-            <button
-              className="danger"
-              disabled={busy}
-              onClick={async () => {
-                if (await onDelete(deletingUser)) setDeletingUser(null);
-              }}
-            >
-              Enviar a papelera
-            </button>
-          </div>
-        </Modal>
+        />
       )}
       {editingUser && (
         <Modal
@@ -567,22 +559,24 @@ export function AdminPanel({
               ))}
             </div>
             <h3 className="spaced">Permisos</h3>
-            <div className="choice-group">
-              {(["member", "admin"] as const).map((role) => (
-                <button
-                  type="button"
-                  aria-pressed={form.role === role}
-                  className={form.role === role ? "chosen" : ""}
-                  onClick={() => setForm({ ...form, role })}
-                  key={role}
-                >
-                  {role === "admin" ? "Admin" : "Usuario"}
-                </button>
-              ))}
-            </div>
+            <label>
+              Rol del usuario
+              <select
+                value={form.role}
+                onChange={(e) => setForm({ ...form, role: e.target.value })}
+              >
+                {roles
+                  .filter((r) => !r.deleted)
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <p className="hint">
-              Admin gestiona usuarios y permisos. Usuario trabaja con clientes y
-              documentos. No se envía correo de verificación.
+              Configura las vistas y acciones de cada rol en Roles y permisos.
+              No se envía correo de verificación.
             </p>
             <div className="modal-actions">
               <button type="button" onClick={() => setOpen(false)}>

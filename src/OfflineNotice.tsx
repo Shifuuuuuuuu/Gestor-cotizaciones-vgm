@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { beginFeedback, isForegroundSave } from "./feedback";
 import type { Profile } from "../shared/people";
 import type { Doc } from "../shared/model";
 import type { PendingSave } from "../shared/offline";
@@ -49,18 +50,29 @@ export function OfflineNotice({
         event as CustomEvent<{ doc: Doc; owner: string; isNew: boolean }>
       ).detail;
       if (owner !== user.id) return;
-      notify("Documento sincronizado", doc.number);
+      if (isForegroundSave(doc.id)) return;
+      const operation = beginFeedback(
+        "Documento sincronizado",
+        "Guardado confirmado por el servidor",
+      );
       if (isNew && doc.kind === "quote")
         try {
-          await exportDoc(doc, "pdf");
-          notify("PDF generado", doc.number + " · Descarga iniciada.");
+          await exportDoc(doc, "pdf", operation.step);
         } catch (e) {
-          notify(
+          operation.success(
             "Documento sincronizado; PDF pendiente",
             (e as Error).message + " Descárgalo desde el detalle.",
-            true,
+            "warning",
           );
+          return;
         }
+      operation.success(
+        "Documento sincronizado",
+        doc.number +
+          (isNew && doc.kind === "quote"
+            ? " · PDF generado y descarga iniciada."
+            : " · Guardado confirmado por el servidor."),
+      );
     };
     void load();
     window.addEventListener("vgm-offline-updated", update);
@@ -79,13 +91,23 @@ export function OfflineNotice({
     }
   }, [connected, user.id]);
   async function run(work: () => Promise<unknown>) {
+    const operation = beginFeedback(
+      "Procesando pendientes",
+      "Procesando cambios pendientes",
+    );
     setBusy(true);
     setError("");
     try {
       await work();
+      operation.step("Actualizando información");
       await refresh.current();
+      operation.success(
+        "Cambios procesados",
+        "Revisa el estado de los documentos en la lista de pendientes.",
+      );
     } catch (e) {
       setError((e as Error).message);
+      operation.error(e);
     } finally {
       setBusy(false);
     }

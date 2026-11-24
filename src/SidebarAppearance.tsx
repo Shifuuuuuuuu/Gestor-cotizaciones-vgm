@@ -36,8 +36,8 @@ export function SidebarAppearance({
     <section className="panel settings">
       <h2>Color del menú</h2>
       <p>
-        Personaliza la barra lateral. El texto y la selección se adaptan para
-        mantener la lectura en modo claro y oscuro.
+        Personaliza el menú. El texto y la selección se adaptan para mantener la
+        lectura en modo claro y oscuro.
       </p>
       <div className="sidebar-colors">
         {sidebarColors.map(([id, label, color]) => (

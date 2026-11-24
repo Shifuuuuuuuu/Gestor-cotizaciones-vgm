@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Permissions } from "./access";
 export const profileSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.email().transform((v) => v.toLowerCase()),
@@ -16,7 +17,10 @@ export const profileSchema = z.object({
 });
 export type Profile = z.infer<typeof profileSchema> & {
   id: string;
-  role: "admin" | "member";
+  role: string;
+  roleName?: string;
+  permissions?: Permissions;
+  permissionsVersion?: string;
   active: boolean;
   deleted?: boolean;
   deletedAt?: string;

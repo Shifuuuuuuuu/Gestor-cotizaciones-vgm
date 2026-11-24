@@ -1,3 +1,5 @@
+import { usePermissions } from "./usePermissions";
+import type { AccessModule } from "../shared/access";
 import { useState } from "react";
 import type { Doc } from "../shared/model";
 import type { Product } from "../shared/inventory";
@@ -23,6 +25,13 @@ export function TrashPanel({
   onRestore: (kind: Kind, id: string) => void;
   onOpen: (doc: Doc) => void;
 }) {
+  const { has } = usePermissions();
+  const scopes: Record<Exclude<Kind, "user">, AccessModule> = {
+    quote: "quotes",
+    invoice: "invoices",
+    product: "products",
+    customer: "customers",
+  };
   const [kind, setKind] = useState<Kind>("quote"),
     [query, setQuery] = useState("");
   const groups: {
@@ -74,7 +83,11 @@ export function TrashPanel({
         ]
       : []),
   ];
-  const selected = groups.find((g) => g.id === kind) ?? groups[0];
+  const allowedGroups = groups.filter((g) =>
+    g.id === "user" ? admin : has(scopes[g.id]),
+  );
+  const selected = allowedGroups.find((g) => g.id === kind) ??
+    allowedGroups[0] ?? { id: "quote" as Kind, label: "Registros", rows: [] };
   const rows = selected.rows.filter((r) =>
     (r.name + " " + r.detail).toLowerCase().includes(query.toLowerCase()),
   );
@@ -96,7 +109,7 @@ export function TrashPanel({
           role="group"
           aria-label="Tipos de papelera"
         >
-          {groups.map((g) => (
+          {allowedGroups.map((g) => (
             <button
               key={g.id}
               aria-pressed={selected.id === g.id}
@@ -148,6 +161,12 @@ export function TrashPanel({
                         </button>
                       )}
                       <button
+                        hidden={
+                          selected.id !== "user" &&
+                          (!has(scopes[selected.id], "delete") ||
+                            (selected.id === "customer" &&
+                              !has("customers", "edit")))
+                        }
                         disabled={busy}
                         onClick={() => onRestore(selected.id, r.id)}
                       >
